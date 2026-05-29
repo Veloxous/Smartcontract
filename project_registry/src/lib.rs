@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 mod events;
 mod types;
@@ -76,6 +76,45 @@ impl ProjectRegistry {
             .instance()
             .get(&DataKey::ProjectCounter)
             .unwrap_or(0)
+    }
+
+    pub fn update_impact_score(env: Env, project_id: u32, credit_quality: u32, green_impact: u32) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        let mut project: ProjectData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Project(project_id))
+            .unwrap_or_else(|| panic!("project not found"));
+
+        project.credit_quality = credit_quality;
+        project.green_impact = green_impact;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id), &project);
+
+        events::project_updated(&env, project_id, credit_quality, green_impact);
+    }
+
+    pub fn get_all_projects(env: Env) -> Vec<(u32, ProjectData)> {
+        let counter: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProjectCounter)
+            .unwrap_or(0);
+        let mut result = Vec::new(&env);
+        for i in 1..=counter {
+            if let Some(project) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, ProjectData>(&DataKey::Project(i))
+            {
+                result.push_back((i, project));
+            }
+        }
+        result
     }
 }
 
