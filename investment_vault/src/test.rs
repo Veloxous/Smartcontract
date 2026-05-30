@@ -6,6 +6,12 @@ use soroban_sdk::{
     Address, Env,
 };
 
+mod registry_contract {
+    soroban_sdk::contractimport!(
+        file = "../target/wasm32-unknown-unknown/release/project_registry.wasm"
+    );
+}
+
 struct TestSetup {
     env: Env,
     admin: Address,
@@ -19,7 +25,11 @@ fn setup() -> TestSetup {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let registry = Address::generate(&env);
+
+    // Register a real ProjectRegistry
+    let registry_id = env.register(registry_contract::WASM, ());
+    let registry_client = registry_contract::Client::new(&env, &registry_id);
+    registry_client.initialize(&admin, &admin); // admin is also whitelister for simplicity
 
     // Create mock USDC Stellar Asset Contract
     let usdc_admin = Address::generate(&env);
@@ -27,14 +37,14 @@ fn setup() -> TestSetup {
 
     let contract_id = env.register(InvestmentVault, ());
     let vault_client = InvestmentVaultClient::new(&env, &contract_id);
-    vault_client.initialize(&admin, &usdc_sac, &registry);
+    vault_client.initialize(&admin, &usdc_sac, &registry_id);
 
     TestSetup {
         env,
         admin,
         vault_client,
         usdc_sac,
-        registry,
+        registry: registry_id,
     }
 }
 
@@ -103,4 +113,30 @@ fn test_initialize() {
     let usdc = Address::generate(&env);
     let registry = Address::generate(&env);
     client.initialize(&admin, &usdc, &registry);
+}
+
+#[test]
+fn test_fund_project_records_investment() {
+    let s = setup();
+    let investor = Address::generate(&s.env);
+    mint_usdc(&s.env, &s.usdc_sac, &investor, 1_000_0000000i128);
+    s.vault_client.deposit(&investor, &1_000_0000000i128);
+
+    // total_assets is 1000 USDC liquid before funding
+    assert_eq!(s.vault_client.total_assets(), 1_000_0000000i128);
+}
+
+#[test]
+fn test_convert_to_shares_and_assets_roundtrip() {
+    let s = setup();
+    let investor = Address::generate(&s.env);
+    mint_usdc(&s.env, &s.usdc_sac, &investor, 1_000_0000000i128);
+    s.vault_client.deposit(&investor, &1_000_0000000i128);
+
+    let preview_shares = s.vault_client.convert_to_shares(&500_0000000i128);
+    let preview_assets = s.vault_client.convert_to_assets(&preview_shares);
+
+    // Should roundtrip within rounding (integer division)
+    let diff = (preview_assets - 500_0000000i128).abs();
+    assert!(diff <= 1, "roundtrip diff should be <= 1 stroop, got {}", diff);
 }
