@@ -26,18 +26,16 @@ fn setup() -> TestSetup {
 
     let admin = Address::generate(&env);
 
-    // Register a real ProjectRegistry
-    let registry_id = env.register(registry_contract::WASM, ());
-    let registry_client = registry_contract::Client::new(&env, &registry_id);
-    registry_client.initialize(&admin, &admin); // admin is also whitelister for simplicity
+    // Register a real ProjectRegistry using constructor
+    let registry_id = env.register(registry_contract::WASM, (&admin, &admin));
 
     // Create mock USDC Stellar Asset Contract
     let usdc_admin = Address::generate(&env);
     let usdc_sac = env.register_stellar_asset_contract_v2(usdc_admin.clone()).address();
 
-    let contract_id = env.register(InvestmentVault, ());
+    // Register vault using constructor
+    let contract_id = env.register(InvestmentVault, (&admin, &usdc_sac, &registry_id));
     let vault_client = InvestmentVaultClient::new(&env, &contract_id);
-    vault_client.initialize(&admin, &usdc_sac, &registry_id);
 
     TestSetup {
         env,
@@ -61,7 +59,7 @@ fn test_first_deposit_mints_1_to_1_shares() {
 
     let shares = s.vault_client.deposit(&investor, &1_000_0000000i128);
 
-    assert_eq!(shares, 1_000_0000000i128); // 1:1 on first deposit
+    assert_eq!(shares, 1_000_0000000i128);
     assert_eq!(s.vault_client.balance(&investor), 1_000_0000000i128);
     assert_eq!(s.vault_client.total_supply(), 1_000_0000000i128);
 }
@@ -77,7 +75,6 @@ fn test_deposit_proportional_after_first() {
     s.vault_client.deposit(&investor1, &1_000_0000000i128);
     let shares2 = s.vault_client.deposit(&investor2, &1_000_0000000i128);
 
-    // Same USDC amount, same total assets → same shares
     assert_eq!(shares2, 1_000_0000000i128);
 }
 
@@ -105,14 +102,14 @@ fn test_total_assets_after_deposit() {
 
 #[test]
 fn test_initialize() {
+    // With __constructor, registration IS initialization
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register(InvestmentVault, ());
-    let client = InvestmentVaultClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     let usdc = Address::generate(&env);
     let registry = Address::generate(&env);
-    client.initialize(&admin, &usdc, &registry);
+    let _contract_id = env.register(InvestmentVault, (&admin, &usdc, &registry));
+    // If registration didn't panic, constructor succeeded
 }
 
 #[test]
@@ -122,7 +119,6 @@ fn test_fund_project_records_investment() {
     mint_usdc(&s.env, &s.usdc_sac, &investor, 1_000_0000000i128);
     s.vault_client.deposit(&investor, &1_000_0000000i128);
 
-    // total_assets is 1000 USDC liquid before funding
     assert_eq!(s.vault_client.total_assets(), 1_000_0000000i128);
 }
 
@@ -136,7 +132,6 @@ fn test_convert_to_shares_and_assets_roundtrip() {
     let preview_shares = s.vault_client.convert_to_shares(&500_0000000i128);
     let preview_assets = s.vault_client.convert_to_assets(&preview_shares);
 
-    // Should roundtrip within rounding (integer division)
     let diff = (preview_assets - 500_0000000i128).abs();
     assert!(diff <= 1, "roundtrip diff should be <= 1 stroop, got {}", diff);
 }

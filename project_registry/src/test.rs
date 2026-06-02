@@ -8,16 +8,14 @@ fn setup() -> (Env, Address, Address, ProjectRegistryClient<'static>) {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let whitelister = Address::generate(&env);
-    let contract_id = env.register(ProjectRegistry, ());
+    let contract_id = env.register(ProjectRegistry, (&admin, &whitelister));
     let client = ProjectRegistryClient::new(&env, &contract_id);
-    client.initialize(&admin, &whitelister);
     (env, admin, whitelister, client)
 }
 
 #[test]
 fn test_initialize_sets_admin_and_whitelister() {
     let (_env, _admin, _whitelister, client) = setup();
-    // Verify state was set by checking total_projects returns 0
     assert_eq!(client.total_projects(), 0);
 }
 
@@ -85,16 +83,14 @@ fn test_update_score_non_admin_panics() {
     let whitelister = Address::generate(&env);
     let creator = Address::generate(&env);
 
-    let contract_id = env.register(ProjectRegistry, ());
-    let client = ProjectRegistryClient::new(&env, &contract_id);
-
-    // Use mock_all_auths only for setup steps
+    // Use mock_all_auths for setup steps
     env.mock_all_auths();
-    client.initialize(&admin, &whitelister);
+    let contract_id = env.register(ProjectRegistry, (&admin, &whitelister));
+    let client = ProjectRegistryClient::new(&env, &contract_id);
     client.set_whitelist(&creator, &true);
     let id = client.create_project(&creator, &String::from_str(&env, "ipfs://Qm"));
 
-    // Provide auth for a non-admin address only — admin.require_auth() will fire and reject
+    // Provide auth for a non-admin address only
     let non_admin = Address::generate(&env);
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &non_admin,
@@ -110,7 +106,6 @@ fn test_update_score_non_admin_panics() {
             sub_invokes: &[],
         },
     }]);
-    // Should panic: admin.require_auth() is not satisfied by non_admin's auth
     client.update_impact_score(&id, &50u32, &50u32);
 }
 
@@ -156,18 +151,15 @@ mod integration {
 
         // Deploy mock USDC
         let usdc_sac = env.register_stellar_asset_contract_v2(admin.clone()).address();
-        // Mint 2000 USDC so the investor can deposit 2000 total
         StellarAssetClient::new(&env, &usdc_sac).mint(&investor, &2_000_0000000i128);
 
-        // Deploy registry
-        let registry_id = env.register(ProjectRegistry, ());
+        // Deploy registry with constructor
+        let registry_id = env.register(ProjectRegistry, (&admin, &whitelister));
         let registry = ProjectRegistryClient::new(&env, &registry_id);
-        registry.initialize(&admin, &whitelister);
 
-        // Deploy vault (using the imported WASM)
-        let vault_id = env.register(vault_contract::WASM, ());
+        // Deploy vault (using the imported WASM) with constructor
+        let vault_id = env.register(vault_contract::WASM, (&admin, &usdc_sac, &registry_id));
         let vault = vault_contract::Client::new(&env, &vault_id);
-        vault.initialize(&admin, &usdc_sac, &registry_id);
 
         // Create a project
         registry.set_whitelist(&project_creator, &true);
@@ -186,7 +178,6 @@ mod integration {
         registry.update_impact_score(&project_id, &80u32, &60u32);
 
         // Admin funds project with 500 USDC from vault
-        // After funding: liquid = 1500, investments = 500
         vault.fund_project(&project_id, &500_0000000i128);
 
         // expected_returns = 500 * (80 + 60) / 200 = 500 * 0.7 = 350 USDC
@@ -198,8 +189,6 @@ mod integration {
         assert_eq!(total, 2_350_0000000i128);
 
         // Investor withdraws half their shares (1000 out of 2000)
-        // returned = 1000 * 2350 / 2000 = 1175 USDC
-        // liquid available = 1500, so 1175 ≤ 1500 → withdrawal succeeds
         let half_shares = shares / 2;
         let returned = vault.withdraw(&investor, &half_shares);
         assert_eq!(returned, 1_175_0000000i128);

@@ -1,8 +1,11 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, MuxedAddress, String};
+use stellar_tokens::fungible::{Base, FungibleToken};
+use stellar_tokens::fungible::burnable::FungibleBurnable;
+use stellar_access::ownable::{set_owner, Ownable};
+use stellar_macros::only_owner;
 
 mod events;
-mod token;
 mod types;
 
 mod registry_interface {
@@ -18,67 +21,21 @@ pub struct InvestmentVault;
 
 #[contractimpl]
 impl InvestmentVault {
-    pub fn initialize(env: Env, admin: Address, usdc_sac: Address, registry: Address) {
-        admin.require_auth();
-        if env.storage().instance().has(&VaultKey::Admin) {
-            panic!("already initialized");
-        }
-        env.storage().instance().set(&VaultKey::Admin, &admin);
+    pub fn __constructor(env: Env, admin: Address, usdc_sac: Address, registry: Address) {
+        set_owner(&env, &admin);
         env.storage().instance().set(&VaultKey::UsdcSac, &usdc_sac);
         env.storage().instance().set(&VaultKey::Registry, &registry);
-        env.storage().persistent().set(&VaultKey::TotalShares, &0i128);
         env.storage().persistent().set(&VaultKey::TotalInvestments, &0i128);
+        Base::set_metadata(
+            &env,
+            7,
+            String::from_str(&env, "Heliobond Shares"),
+            String::from_str(&env, "HBS"),
+        );
     }
 
-    // SEP-41 token interface
-    pub fn balance(env: Env, account: Address) -> i128 {
-        token::balance(&env, &account)
-    }
-
-    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-        from.require_auth();
-        token::transfer(&env, &from, &to, amount);
-    }
-
-    pub fn approve(env: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32) {
-        from.require_auth();
-        token::approve(&env, &from, &spender, amount, expiration_ledger);
-    }
-
-    pub fn allowance(env: Env, from: Address, spender: Address) -> i128 {
-        token::allowance(&env, &from, &spender)
-    }
-
-    pub fn transfer_from(env: Env, spender: Address, from: Address, to: Address, amount: i128) {
-        spender.require_auth();
-        token::transfer_from(&env, &spender, &from, &to, amount);
-    }
-
-    pub fn burn(env: Env, from: Address, amount: i128) {
-        from.require_auth();
-        token::burn(&env, &from, amount);
-    }
-
-    pub fn decimals(_env: Env) -> u32 {
-        token::decimals()
-    }
-
-    pub fn name(env: Env) -> String {
-        token::name(&env)
-    }
-
-    pub fn symbol(env: Env) -> String {
-        token::symbol(&env)
-    }
-
-    pub fn total_supply(env: Env) -> i128 {
-        token::total_shares(&env)
-    }
-
+    #[only_owner]
     pub fn fund_project(env: Env, project_id: u32, amount: i128) {
-        let admin: Address = env.storage().instance().get(&VaultKey::Admin).unwrap();
-        admin.require_auth();
-
         if amount <= 0 {
             panic!("amount must be positive");
         }
@@ -155,7 +112,7 @@ impl InvestmentVault {
 
     pub fn convert_to_shares(env: Env, usdc_amount: i128) -> i128 {
         let total_assets = Self::total_assets(env.clone());
-        let total_shares = token::total_shares(&env);
+        let total_shares = Base::total_supply(&env);
         if total_shares == 0 {
             usdc_amount
         } else {
@@ -165,7 +122,7 @@ impl InvestmentVault {
 
     pub fn convert_to_assets(env: Env, shares_amount: i128) -> i128 {
         let total_assets = Self::total_assets(env.clone());
-        let total_shares = token::total_shares(&env);
+        let total_shares = Base::total_supply(&env);
         if total_shares == 0 {
             0
         } else {
@@ -179,22 +136,20 @@ impl InvestmentVault {
             panic!("deposit must be positive");
         }
 
-        // Compute shares BEFORE the transfer so total_assets reflects pre-deposit state
         let shares = Self::convert_to_shares(env.clone(), usdc_amount);
 
         let usdc_sac: Address = env.storage().instance().get(&VaultKey::UsdcSac).unwrap();
         soroban_sdk::token::TokenClient::new(&env, &usdc_sac)
             .transfer(&from, &env.current_contract_address(), &usdc_amount);
 
-        token::mint(&env, &from, shares);
-
+        Base::mint(&env, &from, shares);
         events::deposit(&env, &from, usdc_amount, shares);
 
         shares
     }
 
     pub fn withdraw(env: Env, from: Address, shares_amount: i128) -> i128 {
-        from.require_auth();
+        // Note: from.require_auth() is called inside Base::burn
         if shares_amount <= 0 {
             panic!("shares must be positive");
         }
@@ -209,15 +164,25 @@ impl InvestmentVault {
             panic!("insufficient liquid USDC");
         }
 
-        token::burn(&env, &from, shares_amount);
+        Base::burn(&env, &from, shares_amount);
         soroban_sdk::token::TokenClient::new(&env, &usdc_sac)
             .transfer(&env.current_contract_address(), &from, &usdc_returned);
 
         events::withdraw(&env, &from, shares_amount, usdc_returned);
-
         usdc_returned
     }
 }
+
+#[contractimpl(contracttrait)]
+impl FungibleToken for InvestmentVault {
+    type ContractType = Base;
+}
+
+#[contractimpl(contracttrait)]
+impl FungibleBurnable for InvestmentVault {}
+
+#[contractimpl(contracttrait)]
+impl Ownable for InvestmentVault {}
 
 #[cfg(test)]
 mod test;

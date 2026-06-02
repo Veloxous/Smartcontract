@@ -11,7 +11,6 @@ pub struct ProjectData {
 
 #[contracttype]
 pub enum DataKey {
-    Admin,
     Whitelister,
     ProjectCounter,
     Project(u32),

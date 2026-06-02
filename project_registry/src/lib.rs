@@ -1,5 +1,7 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
+use stellar_access::ownable::{set_owner, Ownable};
+use stellar_macros::only_owner;
 
 mod events;
 mod types;
@@ -11,12 +13,8 @@ pub struct ProjectRegistry;
 
 #[contractimpl]
 impl ProjectRegistry {
-    pub fn initialize(env: Env, admin: Address, whitelister: Address) {
-        admin.require_auth();
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic!("already initialized");
-        }
-        env.storage().instance().set(&DataKey::Admin, &admin);
+    pub fn __constructor(env: Env, admin: Address, whitelister: Address) {
+        set_owner(&env, &admin);
         env.storage().instance().set(&DataKey::Whitelister, &whitelister);
         env.storage().instance().set(&DataKey::ProjectCounter, &0u32);
     }
@@ -39,11 +37,7 @@ impl ProjectRegistry {
             panic!("not whitelisted");
         }
 
-        let counter: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ProjectCounter)
-            .unwrap_or(0);
+        let counter: u32 = env.storage().instance().get(&DataKey::ProjectCounter).unwrap_or(0);
         let project_id = counter + 1;
 
         let project = ProjectData {
@@ -53,13 +47,8 @@ impl ProjectRegistry {
             green_impact: 0,
         };
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Project(project_id), &project);
-        env.storage()
-            .instance()
-            .set(&DataKey::ProjectCounter, &project_id);
-
+        env.storage().persistent().set(&DataKey::Project(project_id), &project);
+        env.storage().instance().set(&DataKey::ProjectCounter, &project_id);
         events::project_created(&env, project_id, &creator, &uri);
 
         project_id
@@ -73,20 +62,14 @@ impl ProjectRegistry {
     }
 
     pub fn total_projects(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::ProjectCounter)
-            .unwrap_or(0)
+        env.storage().instance().get(&DataKey::ProjectCounter).unwrap_or(0)
     }
 
+    #[only_owner]
     pub fn update_impact_score(env: Env, project_id: u32, credit_quality: u32, green_impact: u32) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-
         if credit_quality > 100 || green_impact > 100 {
             panic!("scores must be 0-100");
         }
-
         let mut project: ProjectData = env
             .storage()
             .persistent()
@@ -95,33 +78,24 @@ impl ProjectRegistry {
 
         project.credit_quality = credit_quality;
         project.green_impact = green_impact;
-
-        env.storage()
-            .persistent()
-            .set(&DataKey::Project(project_id), &project);
-
+        env.storage().persistent().set(&DataKey::Project(project_id), &project);
         events::project_updated(&env, project_id, credit_quality, green_impact);
     }
 
     pub fn get_all_projects(env: Env) -> Vec<(u32, ProjectData)> {
-        let counter: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ProjectCounter)
-            .unwrap_or(0);
+        let counter: u32 = env.storage().instance().get(&DataKey::ProjectCounter).unwrap_or(0);
         let mut result = Vec::new(&env);
         for i in 1..=counter {
-            if let Some(project) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, ProjectData>(&DataKey::Project(i))
-            {
+            if let Some(project) = env.storage().persistent().get::<DataKey, ProjectData>(&DataKey::Project(i)) {
                 result.push_back((i, project));
             }
         }
         result
     }
 }
+
+#[contractimpl(contracttrait)]
+impl Ownable for ProjectRegistry {}
 
 #[cfg(test)]
 mod test;
