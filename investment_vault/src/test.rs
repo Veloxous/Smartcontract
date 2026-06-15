@@ -3,9 +3,7 @@ use super::*;
 use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env};
 
 mod registry_contract {
-    soroban_sdk::contractimport!(
-        file = "../target/wasm32-unknown-unknown/release/project_registry.wasm"
-    );
+    soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/project_registry.wasm");
 }
 
 struct TestSetup {

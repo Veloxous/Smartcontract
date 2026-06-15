@@ -126,7 +126,7 @@ mod integration {
 
     mod vault_contract {
         soroban_sdk::contractimport!(
-            file = "../target/wasm32-unknown-unknown/release/investment_vault.optimized.wasm"
+            file = "../target/wasm32v1-none/release/investment_vault.wasm"
         );
     }
 
