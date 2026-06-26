@@ -21,6 +21,9 @@ pub struct InvestmentVault;
 impl InvestmentVault {
     pub fn __constructor(env: Env, admin: Address, usdc_sac: Address, registry: Address) {
         set_owner(&env, &admin);
+        // Validate that registry is a deployed ProjectRegistry contract by calling it.
+        // This panics at construction time if the address is invalid.
+        registry_interface::Client::new(&env, &registry).total_projects();
         env.storage().instance().set(&VaultKey::UsdcSac, &usdc_sac);
         env.storage().instance().set(&VaultKey::Registry, &registry);
         env.storage()
