@@ -1,5 +1,9 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, Address, Env, MuxedAddress, String};
+
+/// Maximum single deposit: 1 billion USDC (7 decimals) — prevents i128 overflow
+/// in share calculations and caps single-user concentration risk (#112).
+const MAX_DEPOSIT: i128 = 1_000_000_000 * 10_000_000;
 use stellar_access::ownable::{set_owner, Ownable};
 use stellar_macros::only_owner;
 use stellar_tokens::fungible::burnable::FungibleBurnable;
@@ -142,6 +146,9 @@ impl InvestmentVault {
         from.require_auth();
         if usdc_amount <= 0 {
             panic!("deposit must be positive");
+        }
+        if usdc_amount > MAX_DEPOSIT {
+            panic!("deposit exceeds maximum");
         }
 
         let shares = Self::convert_to_shares(env.clone(), usdc_amount);
