@@ -116,7 +116,8 @@ impl InvestmentVault {
     pub fn convert_to_shares(env: Env, usdc_amount: i128) -> i128 {
         let total_assets = Self::total_assets(env.clone());
         let total_shares = Base::total_supply(&env);
-        if total_shares == 0 {
+        if total_shares == 0 || total_assets == 0 {
+            // 1:1 mint when vault is empty (#111)
             usdc_amount
         } else {
             usdc_amount * total_shares / total_assets
@@ -126,7 +127,8 @@ impl InvestmentVault {
     pub fn convert_to_assets(env: Env, shares_amount: i128) -> i128 {
         let total_assets = Self::total_assets(env.clone());
         let total_shares = Base::total_supply(&env);
-        if total_shares == 0 {
+        if total_shares == 0 || total_assets == 0 {
+            // No assets to redeem when vault is empty (#111)
             0
         } else {
             shares_amount * total_assets / total_shares

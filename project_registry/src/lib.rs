@@ -48,6 +48,9 @@ impl ProjectRegistry {
             .instance()
             .get(&DataKey::ProjectCounter)
             .unwrap_or(0);
+        if counter == u32::MAX {
+            panic!("project limit reached");
+        }
         let project_id = counter + 1;
 
         let project = ProjectData {

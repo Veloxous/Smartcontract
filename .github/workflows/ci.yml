@@ -44,3 +44,24 @@ jobs:
 
       - name: Test
         run: cargo test --all --quiet
+
+      - name: Check WASM sizes (#100)
+        run: |
+          echo "Contract WASM sizes:"
+          FAILED=0
+          # Budget: 128 KiB per contract (Stellar's recommended limit for affordable deployment)
+          BUDGET_BYTES=131072
+          for f in target/wasm32v1-none/release/*.wasm; do
+            name=$(basename "$f" .wasm)
+            size=$(wc -c < "$f")
+            printf "  %-40s %7d bytes\n" "$name" "$size"
+            if [ "$size" -gt "$BUDGET_BYTES" ]; then
+              echo "  ❌ $name exceeds ${BUDGET_BYTES}-byte budget by $((size - BUDGET_BYTES)) bytes"
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            echo "One or more contracts exceed the WASM size budget. Optimise with wasm-opt -O3."
+            exit 1
+          fi
+          echo "All contracts within budget."
