@@ -91,7 +91,7 @@ impl ProjectRegistry {
             .storage()
             .persistent()
             .get(&DataKey::Project(project_id))
-            .unwrap_or_else(|| panic!("project not found"));
+            .unwrap_or_else(|| panic!("project {} not found", project_id));
 
         project.credit_quality = credit_quality;
         project.green_impact = green_impact;
