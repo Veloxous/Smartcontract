@@ -43,6 +43,15 @@ pub struct YieldClaimed {
     pub amount: i128,
 }
 
+/// Emitted when an insurance payout is made for a defaulted project (#135).
+#[contractevent]
+pub struct InsuranceClaimed {
+    #[topic]
+    pub project_id: u32,
+    pub recipient: Address,
+    pub amount: i128,
+}
+
 pub fn deposit(env: &Env, from: &Address, usdc_amount: i128, shares_minted: i128) {
     Deposit {
         from: from.clone(),
@@ -76,4 +85,13 @@ pub fn yield_received(env: &Env, from: &Address, amount: i128) {
 
 pub fn yield_claimed(env: &Env, to: &Address, amount: i128) {
     YieldClaimed { to: to.clone(), amount }.publish(env);
+}
+
+pub fn insurance_claimed(env: &Env, project_id: u32, recipient: &Address, amount: i128) {
+    InsuranceClaimed {
+        project_id,
+        recipient: recipient.clone(),
+        amount,
+    }
+    .publish(env);
 }

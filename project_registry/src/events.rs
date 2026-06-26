@@ -35,6 +35,33 @@ pub struct ProjectCertified {
     pub status: CertificationStatus,
 }
 
+/// Emitted when a governance proposal is created (#134).
+#[contractevent]
+pub struct ProposalCreated {
+    #[topic]
+    pub proposal_id: u32,
+    pub proposer: Address,
+    pub voting_ends_at: u64,
+}
+
+/// Emitted when a vote is cast on a proposal (#134).
+#[contractevent]
+pub struct VoteCast {
+    #[topic]
+    pub proposal_id: u32,
+    pub voter: Address,
+    pub support: bool,
+    pub weight: i128,
+}
+
+/// Emitted when a proposal is finalised (#134).
+#[contractevent]
+pub struct ProposalExecuted {
+    #[topic]
+    pub proposal_id: u32,
+    pub passed: bool,
+}
+
 pub fn project_created(env: &Env, project_id: u32, owner: &Address, uri: &String) {
     ProjectCreated {
         project_id,
@@ -63,4 +90,27 @@ pub fn whitelist_set(env: &Env, account: &Address, status: bool) {
 
 pub fn project_certified(env: &Env, project_id: u32, status: CertificationStatus) {
     ProjectCertified { project_id, status }.publish(env);
+}
+
+pub fn proposal_created(env: &Env, proposal_id: u32, proposer: &Address, voting_ends_at: u64) {
+    ProposalCreated {
+        proposal_id,
+        proposer: proposer.clone(),
+        voting_ends_at,
+    }
+    .publish(env);
+}
+
+pub fn vote_cast(env: &Env, proposal_id: u32, voter: &Address, support: bool, weight: i128) {
+    VoteCast {
+        proposal_id,
+        voter: voter.clone(),
+        support,
+        weight,
+    }
+    .publish(env);
+}
+
+pub fn proposal_executed(env: &Env, proposal_id: u32, passed: bool) {
+    ProposalExecuted { proposal_id, passed }.publish(env);
 }

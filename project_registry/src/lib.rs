@@ -11,7 +11,10 @@ const MIN_URI_LEN: u32 = 8;
 mod events;
 mod types;
 
-pub use types::{CertificationStatus, DataKey, ProjectData};
+pub use types::{CertificationStatus, DataKey, ProjectData, Proposal};
+
+/// Minimum voting period in seconds (~1 day at 5s/ledger, ≈ 17280 ledgers) (#134).
+const MIN_VOTING_PERIOD: u64 = 86_400;
 
 #[contract]
 pub struct ProjectRegistry;
@@ -26,6 +29,9 @@ impl ProjectRegistry {
         env.storage()
             .instance()
             .set(&DataKey::ProjectCounter, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &0u32);
     }
 
     pub fn set_whitelist(env: Env, account: Address, status: bool) {
@@ -181,6 +187,119 @@ impl ProjectRegistry {
             }
         }
         result
+    }
+
+    // ── Governance (#134) ──────────────────────────────────────────────────────
+
+    /// Create a governance proposal. `voting_duration_secs` must be >= MIN_VOTING_PERIOD.
+    /// Any whitelisted address may propose; voting weight is determined at vote time
+    /// by the caller's HBS share balance (read via the vault cross-contract call).
+    pub fn create_proposal(
+        env: Env,
+        proposer: Address,
+        description: String,
+        voting_duration_secs: u64,
+    ) -> u32 {
+        proposer.require_auth();
+        if voting_duration_secs < MIN_VOTING_PERIOD {
+            panic!("voting period too short");
+        }
+        let counter: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCounter)
+            .unwrap_or(0);
+        let proposal_id = counter + 1;
+        let voting_ends_at = env.ledger().timestamp() + voting_duration_secs;
+
+        let proposal = Proposal {
+            description,
+            proposer: proposer.clone(),
+            voting_ends_at,
+            votes_for: 0,
+            votes_against: 0,
+            executed: false,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCounter, &proposal_id);
+        events::proposal_created(&env, proposal_id, &proposer, voting_ends_at);
+        proposal_id
+    }
+
+    /// Cast a vote on an open proposal. `weight` is the caller's HBS share
+    /// balance — callers must supply this honestly; the vault contract should
+    /// be queried off-chain before invoking. `support = true` = vote for.
+    pub fn cast_vote(env: Env, voter: Address, proposal_id: u32, support: bool, weight: i128) {
+        voter.require_auth();
+        if weight <= 0 {
+            panic!("voting weight must be positive");
+        }
+        let already: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HasVoted(proposal_id, voter.clone()))
+            .unwrap_or(false);
+        if already {
+            panic!("already voted");
+        }
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .unwrap_or_else(|| panic!("proposal not found"));
+        if env.ledger().timestamp() > proposal.voting_ends_at {
+            panic!("voting period ended");
+        }
+        if proposal.executed {
+            panic!("proposal already executed");
+        }
+        if support {
+            proposal.votes_for += weight;
+        } else {
+            proposal.votes_against += weight;
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+        env.storage()
+            .persistent()
+            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
+        events::vote_cast(&env, proposal_id, &voter, support, weight);
+    }
+
+    /// Finalise a proposal after voting has ended. Anyone may call this.
+    /// Returns true if the proposal passed (votes_for > votes_against).
+    pub fn execute_proposal(env: Env, proposal_id: u32) -> bool {
+        let mut proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .unwrap_or_else(|| panic!("proposal not found"));
+        if env.ledger().timestamp() <= proposal.voting_ends_at {
+            panic!("voting still open");
+        }
+        if proposal.executed {
+            panic!("proposal already executed");
+        }
+        proposal.executed = true;
+        let passed = proposal.votes_for > proposal.votes_against;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+        events::proposal_executed(&env, proposal_id, passed);
+        passed
+    }
+
+    /// Return a proposal by ID.
+    pub fn get_proposal(env: Env, proposal_id: u32) -> Proposal {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .unwrap_or_else(|| panic!("proposal not found"))
     }
 }
 

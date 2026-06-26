@@ -13,6 +13,10 @@ const MAX_DEPOSIT: i128 = 1_000_000_000 * 10_000_000;
 /// Large enough to preserve precision when total_shares >> yield amount.
 const YIELD_SCALE: i128 = 1_000_000_000_000_000_000; // 1e18
 
+/// Basis points deducted from each deposit as an insurance premium (#135).
+/// 50 bps = 0.5 % of deposit amount.
+const INSURANCE_PREMIUM_BPS: i128 = 50;
+
 mod events;
 mod types;
 
@@ -20,7 +24,7 @@ mod registry_interface {
     soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/project_registry.wasm");
 }
 
-pub use types::VaultKey;
+pub use types::{PortfolioInfo, VaultKey};
 
 #[contract]
 pub struct InvestmentVault;
@@ -155,7 +159,11 @@ impl InvestmentVault {
             panic!("deposit exceeds maximum");
         }
 
-        let shares = Self::convert_to_shares(env.clone(), usdc_amount);
+        // Deduct insurance premium before share calculation (#135)
+        let premium = usdc_amount * INSURANCE_PREMIUM_BPS / 10_000;
+        let investable = usdc_amount - premium;
+
+        let shares = Self::convert_to_shares(env.clone(), investable);
 
         let usdc_sac: Address = env.storage().instance().get(&VaultKey::UsdcSac).unwrap();
         soroban_sdk::token::TokenClient::new(&env, &usdc_sac).transfer(
@@ -163,6 +171,26 @@ impl InvestmentVault {
             &env.current_contract_address(),
             &usdc_amount,
         );
+
+        // Credit insurance fund with the premium (#135)
+        let ins: i128 = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::InsuranceFund)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&VaultKey::InsuranceFund, &(ins + premium));
+
+        // Track lifetime deposits for portfolio analytics (#132)
+        let prev_dep: i128 = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::TotalDeposited(from.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&VaultKey::TotalDeposited(from.clone()), &(prev_dep + usdc_amount));
 
         Base::mint(&env, &from, shares);
         events::deposit(&env, &from, usdc_amount, shares);
@@ -288,6 +316,106 @@ impl InvestmentVault {
 
         events::yield_claimed(&env, &from, claimable);
         claimable
+    }
+
+    // ── Portfolio analytics (#132) ─────────────────────────────────────────────
+
+    /// Return a full on-chain portfolio snapshot for `account`.
+    pub fn get_portfolio(env: Env, account: Address) -> PortfolioInfo {
+        let shares = Base::balance(&env, &account);
+        let total_shares = Base::total_supply(&env);
+        let usdc_value = Self::convert_to_assets(env.clone(), shares);
+
+        let accum: i128 = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::YieldPerShareAccum)
+            .unwrap_or(0);
+        let debt: i128 = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::YieldDebt(account.clone()))
+            .unwrap_or(0);
+        let claimable_yield = shares * (accum - debt) / YIELD_SCALE;
+
+        let share_of_pool_bps = if total_shares == 0 {
+            0
+        } else {
+            shares * 10_000 / total_shares
+        };
+
+        let total_deposited: i128 = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::TotalDeposited(account))
+            .unwrap_or(0);
+
+        PortfolioInfo {
+            shares,
+            usdc_value,
+            claimable_yield,
+            share_of_pool_bps,
+            total_deposited,
+        }
+    }
+
+    // ── Insurance fund (#135) ──────────────────────────────────────────────────
+
+    /// Return the current insurance fund USDC balance.
+    pub fn insurance_fund_balance(env: Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&VaultKey::InsuranceFund)
+            .unwrap_or(0)
+    }
+
+    /// Pay out an insurance claim for a defaulted project (owner only).
+    /// Transfers `amount` from the insurance fund to `recipient`.
+    #[only_owner]
+    pub fn claim_insurance(env: Env, project_id: u32, recipient: Address, amount: i128) {
+        if amount <= 0 {
+            panic!("claim amount must be positive");
+        }
+        let already_claimed: bool = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::InsuranceClaimed(project_id))
+            .unwrap_or(false);
+        if already_claimed {
+            panic!("insurance already claimed for this project");
+        }
+        let fund: i128 = env
+            .storage()
+            .persistent()
+            .get(&VaultKey::InsuranceFund)
+            .unwrap_or(0);
+        if amount > fund {
+            panic!("insufficient insurance fund");
+        }
+        // Mark as claimed before transfer (CEI)
+        env.storage()
+            .persistent()
+            .set(&VaultKey::InsuranceClaimed(project_id), &true);
+        env.storage()
+            .persistent()
+            .set(&VaultKey::InsuranceFund, &(fund - amount));
+
+        let usdc_sac: Address = env.storage().instance().get(&VaultKey::UsdcSac).unwrap();
+        soroban_sdk::token::TokenClient::new(&env, &usdc_sac).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &amount,
+        );
+
+        events::insurance_claimed(&env, project_id, &recipient, amount);
+    }
+
+    // ── Multi-asset configuration (#133) ──────────────────────────────────────
+
+    /// Return the primary accepted asset (USDC SAC address).
+    /// Multi-asset vaults should extend this by adding accepted_assets to config.
+    pub fn accepted_asset(env: Env) -> Address {
+        env.storage().instance().get(&VaultKey::UsdcSac).unwrap()
     }
 }
 
