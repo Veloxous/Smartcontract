@@ -294,6 +294,26 @@ impl ProjectRegistry {
         passed
     }
 
+    /// Set only the credit-quality score for a project. Admin-only, bounded 0–100.
+    /// Emits `CreditQualityUpdated` with the new score. Use `update_impact_score` to
+    /// update both scores simultaneously (#6).
+    #[only_owner]
+    pub fn update_credit_quality_score(env: Env, project_id: u32, credit_quality: u32) {
+        if credit_quality > 100 {
+            panic!("credit quality must be 0-100");
+        }
+        let mut project: ProjectData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Project(project_id))
+            .unwrap_or_else(|| panic!("project not found"));
+        project.credit_quality = credit_quality;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id), &project);
+        events::credit_quality_updated(&env, project_id, credit_quality);
+    }
+
     /// Return a proposal by ID.
     pub fn get_proposal(env: Env, proposal_id: u32) -> Proposal {
         env.storage()

@@ -95,3 +95,25 @@ pub fn insurance_claimed(env: &Env, project_id: u32, recipient: &Address, amount
     }
     .publish(env);
 }
+
+/// Emitted when the admin updates the management fee configuration (#7).
+#[contractevent]
+pub struct ManagementFeeSet {
+    #[topic]
+    pub recipient: Address,
+    pub fee_bps: u32,
+}
+
+pub fn management_fee_set(env: &Env, recipient: &Address, fee_bps: u32) {
+    ManagementFeeSet { recipient: recipient.clone(), fee_bps }.publish(env);
+}
+
+/// Emitted when the admin enables secondary market trading for HBS (#126).
+#[contractevent]
+pub struct TradingEnabled {
+    pub enabled: bool,
+}
+
+pub fn trading_enabled(env: &Env, enabled: bool) {
+    TradingEnabled { enabled }.publish(env);
+}

@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address};
+use soroban_sdk::{contracttype, Address, String};
 
 #[contracttype]
 pub enum VaultKey {
@@ -16,6 +16,26 @@ pub enum VaultKey {
     InsuranceClaimed(u32),
     /// Lifetime USDC deposited by an investor — used in portfolio analytics (#132).
     TotalDeposited(Address),
+    /// Optional management fee in basis points, admin-set, hard-capped (#7).
+    ManagementFeeBps,
+    /// Recipient address for management fee transfers (#7).
+    ManagementFeeRecipient,
+    /// Whether secondary market trading of HBS is active (#126).
+    TradingEnabled,
+}
+
+/// Metadata returned for DEX listing and secondary market integration (#126).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HBSTokenInfo {
+    /// Human-readable token name.
+    pub name: String,
+    /// Ticker symbol.
+    pub symbol: String,
+    /// Number of decimal places (7 for USDC-parity denominations).
+    pub decimals: u32,
+    /// Whether the admin has enabled secondary trading.
+    pub trading_enabled: bool,
 }
 
 /// On-chain portfolio snapshot for a single investor (#132).

@@ -24,7 +24,11 @@ mod registry_interface {
     soroban_sdk::contractimport!(file = "../target/wasm32v1-none/release/project_registry.wasm");
 }
 
-pub use types::{PortfolioInfo, VaultKey};
+pub use types::{HBSTokenInfo, PortfolioInfo, VaultKey};
+
+/// Hard cap on the management fee to protect investors (#7).
+/// 500 bps = 5% maximum.
+const MAX_MANAGEMENT_FEE_BPS: u32 = 500;
 
 #[contract]
 pub struct InvestmentVault;
@@ -173,12 +177,22 @@ impl InvestmentVault {
 
         // Deduct insurance premium before share calculation (#135)
         let premium = usdc_amount * INSURANCE_PREMIUM_BPS / 10_000;
-        let investable = usdc_amount - premium;
+
+        // Deduct optional management fee (#7)
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&VaultKey::ManagementFeeBps)
+            .unwrap_or(0);
+        let fee_amount = usdc_amount * (fee_bps as i128) / 10_000;
+
+        let investable = usdc_amount - premium - fee_amount;
 
         let shares = Self::convert_to_shares(env.clone(), investable);
 
         let usdc_sac: Address = env.storage().instance().get(&VaultKey::UsdcSac).unwrap();
-        soroban_sdk::token::TokenClient::new(&env, &usdc_sac).transfer(
+        let token = soroban_sdk::token::TokenClient::new(&env, &usdc_sac);
+        token.transfer(
             &from,
             &env.current_contract_address(),
             &usdc_amount,
@@ -193,6 +207,16 @@ impl InvestmentVault {
         env.storage()
             .persistent()
             .set(&VaultKey::InsuranceFund, &(ins + premium));
+
+        // Transfer management fee to recipient if non-zero (#7)
+        if fee_amount > 0 {
+            let recipient: Address = env
+                .storage()
+                .instance()
+                .get(&VaultKey::ManagementFeeRecipient)
+                .unwrap_or_else(|| panic!("fee recipient not set"));
+            token.transfer(&env.current_contract_address(), &recipient, &fee_amount);
+        }
 
         // Track lifetime deposits for portfolio analytics (#132)
         let prev_dep: i128 = env
@@ -428,6 +452,71 @@ impl InvestmentVault {
     /// Multi-asset vaults should extend this by adding accepted_assets to config.
     pub fn accepted_asset(env: Env) -> Address {
         env.storage().instance().get(&VaultKey::UsdcSac).unwrap()
+    }
+
+    // ── Management fee (#7) ───────────────────────────────────────────────────
+
+    /// Set the optional management fee deducted from each deposit.
+    /// `fee_bps` is bounded by MAX_MANAGEMENT_FEE_BPS (500 = 5%).
+    /// Pass `fee_bps = 0` to disable the fee entirely.
+    #[only_owner]
+    pub fn set_management_fee(env: Env, fee_bps: u32, recipient: Address) {
+        if fee_bps > MAX_MANAGEMENT_FEE_BPS {
+            panic!("fee exceeds maximum of {} bps", MAX_MANAGEMENT_FEE_BPS);
+        }
+        env.storage()
+            .instance()
+            .set(&VaultKey::ManagementFeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&VaultKey::ManagementFeeRecipient, &recipient);
+        events::management_fee_set(&env, &recipient, fee_bps);
+    }
+
+    /// Return the current management fee in basis points (0 = disabled).
+    pub fn get_management_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&VaultKey::ManagementFeeBps)
+            .unwrap_or(0)
+    }
+
+    // ── Secondary market trading (#126) ──────────────────────────────────────
+
+    /// Enable secondary market trading for HBS shares. Admin-only.
+    /// Once enabled, the flag is readable by external DEX integrations via
+    /// `is_trading_enabled`. HBS is natively SEP-41 tradeable on Stellar DEX;
+    /// this flag signals to UIs and aggregators that the token is officially listed.
+    #[only_owner]
+    pub fn enable_secondary_trading(env: Env) {
+        env.storage()
+            .instance()
+            .set(&VaultKey::TradingEnabled, &true);
+        events::trading_enabled(&env, true);
+    }
+
+    /// Return whether the admin has enabled secondary market trading for HBS.
+    pub fn is_trading_enabled(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&VaultKey::TradingEnabled)
+            .unwrap_or(false)
+    }
+
+    /// Return HBS token metadata for DEX listing and secondary market integration.
+    /// The `trading_enabled` field mirrors `is_trading_enabled()`.
+    pub fn get_hbs_token_info(env: Env) -> HBSTokenInfo {
+        let trading_enabled: bool = env
+            .storage()
+            .instance()
+            .get(&VaultKey::TradingEnabled)
+            .unwrap_or(false);
+        HBSTokenInfo {
+            name: String::from_str(&env, "Heliobond Shares"),
+            symbol: String::from_str(&env, "HBS"),
+            decimals: 7,
+            trading_enabled,
+        }
     }
 }
 

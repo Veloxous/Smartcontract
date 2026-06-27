@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, String};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, IntoVal, String};
 
 fn setup() -> (Env, Address, Address, ProjectRegistryClient<'static>) {
     let env = Env::default();
@@ -175,6 +175,66 @@ fn test_maturity_date_is_mature() {
     // Advance ledger past maturity
     env.ledger().set_timestamp(now + 1001);
     assert!(client.is_mature(&id));
+}
+
+// ── #6: credit-quality score tests ───────────────────────────────────────────
+
+#[test]
+fn test_update_credit_quality_score_success() {
+    let (env, _admin, _whitelister, client) = setup();
+    let creator = Address::generate(&env);
+    client.set_whitelist(&creator, &true);
+    let id = client.create_project(&creator, &String::from_str(&env, "ipfs://Qm"), &0u64);
+
+    client.update_credit_quality_score(&id, &75u32);
+
+    let project = client.get_project(&id);
+    assert_eq!(project.credit_quality, 75);
+    // green_impact unchanged
+    assert_eq!(project.green_impact, 0);
+}
+
+#[test]
+#[should_panic(expected = "credit quality must be 0-100")]
+fn test_update_credit_quality_score_out_of_range_panics() {
+    let (env, _admin, _whitelister, client) = setup();
+    let creator = Address::generate(&env);
+    client.set_whitelist(&creator, &true);
+    let id = client.create_project(&creator, &String::from_str(&env, "ipfs://Qm"), &0u64);
+    client.update_credit_quality_score(&id, &101u32);
+}
+
+#[test]
+fn test_update_credit_quality_score_boundary_values() {
+    let (env, _admin, _whitelister, client) = setup();
+    let creator = Address::generate(&env);
+    client.set_whitelist(&creator, &true);
+    let id = client.create_project(&creator, &String::from_str(&env, "ipfs://Qm"), &0u64);
+
+    client.update_credit_quality_score(&id, &0u32);
+    assert_eq!(client.get_project(&id).credit_quality, 0);
+
+    client.update_credit_quality_score(&id, &100u32);
+    assert_eq!(client.get_project(&id).credit_quality, 100);
+}
+
+#[test]
+fn test_update_credit_quality_independent_of_green_impact() {
+    let (env, _admin, _whitelister, client) = setup();
+    let creator = Address::generate(&env);
+    client.set_whitelist(&creator, &true);
+    let id = client.create_project(&creator, &String::from_str(&env, "ipfs://Qm"), &0u64);
+
+    // Set both via update_impact_score first
+    client.update_impact_score(&id, &60u32, &80u32);
+    assert_eq!(client.get_project(&id).credit_quality, 60);
+    assert_eq!(client.get_project(&id).green_impact, 80);
+
+    // Update only credit_quality — green_impact must remain 80
+    client.update_credit_quality_score(&id, &45u32);
+    let project = client.get_project(&id);
+    assert_eq!(project.credit_quality, 45);
+    assert_eq!(project.green_impact, 80);
 }
 
 // Integration: full Heliobond flow across both contracts

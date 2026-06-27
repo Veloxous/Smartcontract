@@ -114,3 +114,15 @@ pub fn vote_cast(env: &Env, proposal_id: u32, voter: &Address, support: bool, we
 pub fn proposal_executed(env: &Env, proposal_id: u32, passed: bool) {
     ProposalExecuted { proposal_id, passed }.publish(env);
 }
+
+/// Emitted when the admin updates a project's credit-quality score independently (#6).
+#[contractevent]
+pub struct CreditQualityUpdated {
+    #[topic]
+    pub project_id: u32,
+    pub credit_quality: u32,
+}
+
+pub fn credit_quality_updated(env: &Env, project_id: u32, credit_quality: u32) {
+    CreditQualityUpdated { project_id, credit_quality }.publish(env);
+}
