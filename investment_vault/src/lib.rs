@@ -264,6 +264,7 @@ impl InvestmentVault {
                 .set(&VaultKey::QueueTail, &(tail + 1));
             events::withdraw_queued(&env, &from, shares_amount, usdc_returned);
             return 0;
+            panic!("insufficient liquid USDC: funds may be deployed to projects");
         }
 
         Base::burn(&env, &from, shares_amount);
@@ -599,6 +600,15 @@ impl InvestmentVault {
 #[contractimpl(contracttrait)]
 impl FungibleToken for InvestmentVault {
     type ContractType = Base;
+
+    fn transfer(e: &Env, from: Address, to: MuxedAddress, amount: i128) {
+        // Soroban has no zero address; the vault's own address is the closest
+        // equivalent — shares sent here can never be recovered (#118).
+        if to.address() == e.current_contract_address() {
+            panic!("transfer to vault address not allowed");
+        }
+        Base::transfer(e, &from, &to, amount);
+    }
 }
 
 #[contractimpl(contracttrait)]
