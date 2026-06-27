@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, contracterror, Address, String};
+use soroban_sdk::{contracttype, contracterror, Address, BytesN, String, Vec};
 
 /// Structured error codes for the InvestmentVault contract (#75).
 /// Variant values are stable — never reorder or renumber after deployment,
@@ -45,6 +45,14 @@ pub enum VaultError {
     BelowMinGreenImpact     = 18,
     /// Funding threshold value is out of the 0–100 range.
     ThresholdOutOfRange     = 19,
+    /// Bridge contract address is not set.
+    BridgeNotSet            = 20,
+    /// Wormhole core contract address is not set.
+    WormholeCoreNotSet      = 21,
+    /// Emitter is not trusted for cross-chain minting.
+    EmitterNotTrusted       = 22,
+    /// VAA has already been consumed.
+    VaaAlreadyConsumed      = 23,
 }
 
 #[contracttype]
@@ -79,6 +87,68 @@ pub enum VaultKey {
     MinCreditQuality,
     /// Admin-set minimum green impact a project must have before funding (#47).
     MinGreenImpact,
+    /// Bridge contract address for cross-chain bridging.
+    Bridge,
+    /// Flash loan fee in basis points.
+    FlashLoanFee,
+    /// Carbon credit oracle contract address.
+    CarbonOracle,
+    /// Carbon credit price in USD micro-units.
+    CarbonCreditPrice,
+    /// Carbon credit balance per address.
+    CarbonCreditBalance(Address),
+    /// Compliance event sequence counter.
+    ComplianceEventCounter,
+    /// A compliance event by sequence number.
+    ComplianceEvent(u64),
+    /// Latest regulatory reporting snapshot.
+    ReportingSnapshot,
+    /// Maximum transaction amount for compliance (0 = no limit).
+    MaxTransactionAmount,
+}
+
+/// Container for wormhole bridge data keys.
+#[contracttype]
+pub enum BridgeDataKey {
+    WormholeCore,
+    TrustedEmitter(u32, BytesN<32>),
+    ConsumedVaa(BytesN<32>),
+}
+
+/// A carbon credit calculation result.
+#[contracttype]
+pub struct CarbonCreditCalculation {
+    pub project_id: u32,
+    pub amount_invested: i128,
+    pub credits: i128,
+}
+
+/// A recorded compliance event for audit trail purposes.
+#[contracttype]
+pub struct ComplianceEventData {
+    pub seq: u64,
+    pub timestamp: u64,
+    pub event_type: String,
+    pub data: String,
+}
+
+/// A periodic snapshot of the vault's key metrics for regulatory reporting.
+#[contracttype]
+pub struct ReportingSnapshotData {
+    pub timestamp: u64,
+    pub total_assets: i128,
+    pub total_supply: i128,
+    pub total_investments: i128,
+}
+
+/// A comprehensive regulatory data export combining the latest snapshot
+/// with recent compliance events.
+#[contracttype]
+pub struct RegulatoryReport {
+    pub snapshot: ReportingSnapshotData,
+    pub recent_events: Vec<ComplianceEventData>,
+    pub max_transaction_amount: i128,
+    pub carbon_credit_price: i128,
 }
 
 /// Metadata returned for DEX listing and secondary market integration (#126).
