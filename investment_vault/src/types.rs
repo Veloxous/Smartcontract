@@ -105,6 +105,8 @@ pub enum VaultKey {
     ReportingSnapshot,
     /// Maximum transaction amount for compliance (0 = no limit).
     MaxTransactionAmount,
+    /// Cached expected returns (#80).
+    ExpectedReturns,
 }
 
 /// Container for wormhole bridge data keys.

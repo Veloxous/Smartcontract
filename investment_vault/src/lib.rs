@@ -71,6 +71,10 @@ const HIGH_TIER_PCT: i128 = 10;  // 10% of liquid at ≥ 90% utilization
 const MED_TIER_PCT: i128  = 25;  // 25% of liquid at ≥ 70% utilization
 const LOW_TIER_PCT: i128  = 50;  // 50% of liquid at ≥ 50% utilization
 
+pub const CONTRACT_NAME: &str = "Investment Vault";
+pub const CONTRACT_DESCRIPTION: &str = "Heliobond Investment Vault";
+pub const CONTRACT_VERSION: &str = "1.0.0";
+
 #[contract]
 pub struct InvestmentVault;
 
@@ -98,6 +102,10 @@ impl InvestmentVault {
             String::from_str(&env, "Heliobond Shares"),
             String::from_str(&env, "HBS"),
         );
+    }
+
+    pub fn get_version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
     }
 
     /// Transfer USDC from the vault to a registered project's owner. Admin-only.
@@ -169,6 +177,10 @@ impl InvestmentVault {
             .persistent()
             .set(&VaultKey::ProjectInvestment(project_id), &(prev + amount));
 
+        let current_expected: i128 = env.storage().instance().get(&VaultKey::ExpectedReturns).unwrap_or(0);
+        let extra_expected = amount * (project.credit_quality as i128 + project.green_impact as i128) / 200;
+        env.storage().instance().set(&VaultKey::ExpectedReturns, &(current_expected + extra_expected));
+
         let total_inv: i128 = env
             .storage()
             .persistent()
@@ -186,6 +198,11 @@ impl InvestmentVault {
     /// Formula per funded project: `investment × (credit_quality + green_impact) / 200`.
     /// Iterates all registry projects — O(n). Returns 0 when no projects are funded.
     pub fn get_expected_returns(env: Env) -> i128 {
+        env.storage().instance().get(&VaultKey::ExpectedReturns).unwrap_or(0)
+    }
+
+    #[only_owner]
+    pub fn sync_expected_returns(env: Env) {
         let registry_addr: Address = env.storage().instance().get(&VaultKey::Registry).unwrap();
         let registry = registry_interface::Client::new(&env, &registry_addr);
         let total_projects = registry.total_projects();
@@ -204,7 +221,7 @@ impl InvestmentVault {
                     / 200;
             }
         }
-        expected
+        env.storage().instance().set(&VaultKey::ExpectedReturns, &expected);
     }
 
     /// Return the vault's net asset value (NAV).

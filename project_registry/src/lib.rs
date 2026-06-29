@@ -21,6 +21,13 @@ pub use types::{CertificationStatus, DataKey, ProjectData, Proposal, RegistryErr
 /// Minimum voting period in seconds (~1 day at 5s/ledger, ≈ 17280 ledgers) (#134).
 const MIN_VOTING_PERIOD: u64 = 86_400;
 
+/// Minimum oracle update interval in seconds (1 hour).
+const MIN_UPDATE_INTERVAL: u64 = 3600;
+
+pub const CONTRACT_NAME: &str = "Project Registry";
+pub const CONTRACT_DESCRIPTION: &str = "Heliobond Project Registry";
+pub const CONTRACT_VERSION: &str = "1.0.0";
+
 #[contract]
 pub struct ProjectRegistry;
 
@@ -41,6 +48,10 @@ impl ProjectRegistry {
         env.storage()
             .instance()
             .set(&DataKey::ProposalCounter, &0u32);
+    }
+
+    pub fn get_version(env: Env) -> String {
+        String::from_str(&env, CONTRACT_VERSION)
     }
 
     /// Grant or revoke project-creation rights for `account`.
@@ -102,6 +113,7 @@ impl ProjectRegistry {
             green_impact: 0,
             maturity_date,
             certification_status: CertificationStatus::None,
+            last_update_timestamp: 0,
         };
 
         env.storage()
@@ -146,6 +158,11 @@ impl ProjectRegistry {
             .get(&DataKey::Project(project_id))
             .unwrap_or_else(|| panic_with_error!(&env, RegistryError::ProjectNotFound));
 
+        let now = env.ledger().timestamp();
+        if project.last_update_timestamp > 0 && now < project.last_update_timestamp + MIN_UPDATE_INTERVAL {
+            panic_with_error!(&env, RegistryError::UpdateTooFrequent);
+        }
+
         // Skip write and event if scores are identical (#124)
         if project.credit_quality == credit_quality && project.green_impact == green_impact {
             return;
@@ -157,6 +174,50 @@ impl ProjectRegistry {
 
         project.credit_quality = credit_quality;
         project.green_impact = green_impact;
+        project.last_update_timestamp = now;
+        let new_rate = compute_rate(credit_quality, green_impact);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id), &project);
+        events::project_updated(&env, project_id, credit_quality, green_impact);
+        events::rate_updated(&env, project_id, new_rate);
+        events::score_changed(
+            &env,
+            project_id,
+            old_cq,
+            credit_quality,
+            old_gi,
+            green_impact,
+            old_rate,
+            new_rate,
+        );
+    }
+
+    /// Emergency override for impact scores (ignores the time interval check). Admin-only.
+    #[only_owner]
+    pub fn emergency_update_impact_score(env: Env, project_id: u32, credit_quality: u32, green_impact: u32) {
+        if credit_quality > 100 || green_impact > 100 {
+            panic_with_error!(&env, RegistryError::ScoresOutOfRange);
+        }
+        let mut project: ProjectData = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Project(project_id))
+            .unwrap_or_else(|| panic_with_error!(&env, RegistryError::ProjectNotFound));
+
+        // Skip write and event if scores are identical (#124)
+        if project.credit_quality == credit_quality && project.green_impact == green_impact {
+            return;
+        }
+
+        let old_cq = project.credit_quality;
+        let old_gi = project.green_impact;
+        let old_rate = compute_rate(old_cq, old_gi);
+
+        project.credit_quality = credit_quality;
+        project.green_impact = green_impact;
+        project.last_update_timestamp = env.ledger().timestamp();
         let new_rate = compute_rate(credit_quality, green_impact);
 
         env.storage()
@@ -353,7 +414,15 @@ impl ProjectRegistry {
             .persistent()
             .get(&DataKey::Project(project_id))
             .unwrap_or_else(|| panic_with_error!(&env, RegistryError::ProjectNotFound));
+        
+        let now = env.ledger().timestamp();
+        if project.last_update_timestamp > 0 && now < project.last_update_timestamp + MIN_UPDATE_INTERVAL {
+            panic_with_error!(&env, RegistryError::UpdateTooFrequent);
+        }
+        
+        let old_cq = project.credit_quality;
         project.credit_quality = credit_quality;
+        project.last_update_timestamp = now;
         let new_rate = compute_rate(credit_quality, project.green_impact);
         env.storage()
             .persistent()

@@ -53,6 +53,8 @@ pub enum RegistryError {
     NotAuthorizedReputation    = 22,
     /// Credit quality score is out of the 0–100 range.
     CreditQualityOutOfRange    = 23,
+    /// Oracle updates are too frequent.
+    UpdateTooFrequent          = 24,
 }
 
 /// Certification state for a green project (#130).
@@ -78,6 +80,8 @@ pub struct ProjectData {
     pub maturity_date: u64,
     /// Third-party certification state (#130).
     pub certification_status: CertificationStatus,
+    /// Timestamp of the last score update (#70).
+    pub last_update_timestamp: u64,
 }
 
 /// A governance proposal that HBS holders vote on (#134).
