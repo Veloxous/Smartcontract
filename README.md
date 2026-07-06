@@ -68,6 +68,12 @@ The platform uses a role-based administrative design (Owner and Whitelister role
 
 For details, see [`docs/GOVERNANCE.md`](./docs/GOVERNANCE.md).
 
+### API & Rust Crate Documentation
+
+Rust docs are automatically generated and published via CI:
+* Deployed reference: [https://BuildersWCT.github.io/contracts/](https://BuildersWCT.github.io/contracts/)
+
+
 ### ProjectRegistry
 
 **Constructor**
