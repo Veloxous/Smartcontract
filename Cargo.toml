@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["project_registry", "investment_vault"]
+members = ["contracts/veloxous_escrow"]
 
 [workspace.dependencies]
 soroban-sdk = { version = "=26.1.0" }
