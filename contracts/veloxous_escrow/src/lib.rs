@@ -130,8 +130,8 @@ impl VeloxousEscrow {
             .get(&key)
             .unwrap_or_else(|| panic!("escrow not found"));
 
-        if state.status != EscrowStatus::Locked {
-            panic!("escrow not locked");
+        if state.status != EscrowStatus::Locked && state.status != EscrowStatus::Disputed {
+            panic!("escrow not locked or disputed");
         }
 
         // Refund buyer
