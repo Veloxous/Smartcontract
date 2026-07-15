@@ -121,4 +121,13 @@ impl VeloxousEscrow {
         state.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&key, &state);
     }
+
+    /// Read the current state of an escrow
+    pub fn get_escrow(env: Env, listing_id: String) -> EscrowState {
+        let key = DataKey::Escrow(listing_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("escrow not found"))
+    }
 }
