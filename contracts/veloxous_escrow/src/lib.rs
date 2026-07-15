@@ -24,6 +24,7 @@ pub enum EscrowStatus {
     Locked,
     Released,
     Refunded,
+    Disputed,
 }
 
 #[contract]
@@ -95,6 +96,25 @@ impl VeloxousEscrow {
         client.transfer(&env.current_contract_address(), &state.seller, &state.amount);
 
         state.status = EscrowStatus::Released;
+        env.storage().persistent().set(&key, &state);
+    }
+
+    /// Buyer flags the transaction as disputed, halting release/refund until admin resolves
+    pub fn dispute(env: Env, listing_id: String) {
+        let key = DataKey::Escrow(listing_id);
+        let mut state: EscrowState = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("escrow not found"));
+
+        if state.status != EscrowStatus::Locked {
+            panic!("escrow not locked");
+        }
+
+        state.buyer.require_auth();
+
+        state.status = EscrowStatus::Disputed;
         env.storage().persistent().set(&key, &state);
     }
 
