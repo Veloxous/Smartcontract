@@ -81,7 +81,7 @@ fn setup_test<'a>(
     admins.push_back(admin4);
     admins.push_back(admin5);
 
-    escrow_client.init(&admins, &3, &Some(rep_id.clone()));
+    escrow_client.init(&admins, &3, &Some(rep_id.clone()), &None);
 
     let buyer = Address::generate(env);
     let seller = Address::generate(env);
@@ -371,4 +371,38 @@ fn test_old_admin_cannot_vote_after_rotation() {
 
     // Old admin attempts to vote (should panic)
     escrow_client.propose_resolution(&old_admin, &tx_id, &500, &500);
+}
+
+#[test]
+fn test_fee_pool_accumulation_and_sweep() {
+    let env = Env::default();
+    let (escrow_client, token_addr, token_client, token_admin, _admins, _buyer, _seller, _rep) =
+        setup_test(&env);
+
+    // Accumulate fee into escrow fee pool
+    escrow_client.accumulate_fee(&token_addr, &150);
+    assert_eq!(escrow_client.get_fee_pool(&token_addr), 150);
+
+    // Mint tokens to escrow contract so sweep_fees can transfer
+    token_admin.mint(&escrow_client.address, &150);
+    assert_eq!(token_client.balance(&escrow_client.address), 150);
+
+    // Sweep fees (without treasury contract set, pool is reset to 0 and event emitted)
+    escrow_client.sweep_fees(&token_addr);
+    assert_eq!(escrow_client.get_fee_pool(&token_addr), 0);
+}
+
+#[test]
+#[should_panic(expected = "fee pool empty")]
+fn test_double_sweep_prevention() {
+    let env = Env::default();
+    let (escrow_client, token_addr, _token_client, token_admin, _admins, _buyer, _seller, _rep) =
+        setup_test(&env);
+
+    escrow_client.accumulate_fee(&token_addr, &100);
+    token_admin.mint(&escrow_client.address, &100);
+
+    escrow_client.sweep_fees(&token_addr);
+    // Second sweep should panic with "fee pool empty"
+    escrow_client.sweep_fees(&token_addr);
 }

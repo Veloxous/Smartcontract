@@ -46,11 +46,13 @@ pub enum DataKey {
     Admins,
     Threshold,
     ReputationContract,
+    TreasuryContract,
     Initialized,
 
     // Persistent Storage
-    Escrow(String),  // transaction_id / listing_id -> EscrowState
-    Dispute(String), // transaction_id -> Dispute
+    Escrow(String),   // transaction_id / listing_id -> EscrowState
+    Dispute(String),  // transaction_id -> Dispute
+    FeePool(Address), // asset address -> accumulated i128 fee pool
 
     // Temporary Storage
     Proposal(String, i128, i128), // (transaction_id, refund, payout) -> ProposalState
