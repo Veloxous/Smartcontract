@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, token};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,8 +62,9 @@ impl VeloxousEscrow {
         }
 
         // Transfer tokens from buyer to contract
+        let contract_addr = env.current_contract_address();
         let client = token::Client::new(&env, &token);
-        client.transfer(&buyer, &env.current_contract_address(), &amount);
+        client.transfer(&buyer, &contract_addr, &amount);
 
         // Save escrow state
         let state = EscrowState {
@@ -92,8 +93,9 @@ impl VeloxousEscrow {
         state.buyer.require_auth();
 
         // Transfer funds to seller
+        let contract_addr = env.current_contract_address();
         let client = token::Client::new(&env, &state.token);
-        client.transfer(&env.current_contract_address(), &state.seller, &state.amount);
+        client.transfer(&contract_addr, &state.seller, &state.amount);
 
         state.status = EscrowStatus::Released;
         env.storage().persistent().set(&key, &state);
@@ -135,8 +137,9 @@ impl VeloxousEscrow {
         }
 
         // Refund buyer
+        let contract_addr = env.current_contract_address();
         let client = token::Client::new(&env, &state.token);
-        client.transfer(&env.current_contract_address(), &state.buyer, &state.amount);
+        client.transfer(&contract_addr, &state.buyer, &state.amount);
 
         state.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&key, &state);
