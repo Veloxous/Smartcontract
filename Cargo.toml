@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["contracts/veloxous_escrow"]
+members = [
+    "contracts/admin",
+    "contracts/marketplace_escrow",
+    "contracts/veloxous_escrow",
+]
 
 [workspace.dependencies]
 soroban-sdk = { version = "=26.1.0" }
