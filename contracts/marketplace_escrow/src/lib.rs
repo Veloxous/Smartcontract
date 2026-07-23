@@ -12,17 +12,19 @@ pub struct MarketplaceEscrow;
 
 #[contractimpl]
 impl MarketplaceEscrow {
-    /// Initialize the marketplace escrow contract with admins, threshold, and optional reputation contract address.
+    /// Initialize the marketplace escrow contract with admins, threshold, optional reputation contract address, and optional treasury contract address.
     ///
     /// # Arguments
     /// * `admins` - Vector of 5 initial admin addresses (or N >= threshold).
     /// * `threshold` - Multisig voting threshold M (default 3). Must be <= N and > 0.
     /// * `reputation_contract` - Optional address of an off-chain/on-chain reputation contract.
+    /// * `treasury_contract` - Optional address of the Treasury contract.
     pub fn init(
         env: Env,
         admins: Vec<Address>,
         threshold: u32,
         reputation_contract: Option<Address>,
+        treasury_contract: Option<Address>,
     ) {
         if env.storage().instance().has(&DataKey::Initialized) {
             panic!("already initialized");
@@ -54,6 +56,12 @@ impl MarketplaceEscrow {
             env.storage()
                 .instance()
                 .set(&DataKey::ReputationContract, &rep);
+        }
+
+        if let Some(treasury) = treasury_contract {
+            env.storage()
+                .instance()
+                .set(&DataKey::TreasuryContract, &treasury);
         }
 
         env.storage().instance().set(&DataKey::Initialized, &true);
@@ -454,6 +462,59 @@ impl MarketplaceEscrow {
                 );
             }
         }
+    }
+
+    /// Accumulate protocol fee into persistent fee pool storage.
+    pub fn accumulate_fee(env: Env, asset: Address, amount: i128) {
+        if amount <= 0 {
+            return;
+        }
+        let key = DataKey::FeePool(asset);
+        let current_pool: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        let new_pool = current_pool.checked_add(amount).unwrap();
+        env.storage().persistent().set(&key, &new_pool);
+    }
+
+    /// Sweep accumulated fee pool for an asset token and transfer to Treasury.
+    /// Resets the fee pool to 0 upon successful transfer to prevent double sweeping.
+    pub fn sweep_fees(env: Env, asset: Address) {
+        let key = DataKey::FeePool(asset.clone());
+        let pool_amount: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+
+        if pool_amount <= 0 {
+            panic!("fee pool empty");
+        }
+
+        // Reset fee pool first to prevent double sweeping
+        env.storage().persistent().set(&key, &0i128);
+
+        let contract_addr = env.current_contract_address();
+
+        if let Some(treasury_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::TreasuryContract)
+        {
+            let token_client = token::Client::new(&env, &asset);
+            token_client.transfer(&contract_addr, &treasury_addr, &pool_amount);
+
+            let treasury_client = treasury::TreasuryContractClient::new(&env, &treasury_addr);
+            treasury_client.route_fee(&asset, &pool_amount);
+        }
+
+        events::emit_fee_collected(
+            &env,
+            contract_addr,
+            asset,
+            pool_amount,
+            env.ledger().timestamp(),
+        );
+    }
+
+    /// Read accumulated fee pool amount for a given asset token.
+    pub fn get_fee_pool(env: Env, asset: Address) -> i128 {
+        let key = DataKey::FeePool(asset);
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     /// Admin proposes/votes for replacing an existing admin with a new admin.
