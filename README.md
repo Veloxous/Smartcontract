@@ -32,8 +32,28 @@ This repository contains the Rust-based Soroban smart contracts deployed on the 
 ---
 
 ## 🏗 Core Contracts
-- **VeloxousEscrow:** Handles the locking of USDC. Funds are only released to the seller/technician when the buyer confirms receipt of the physical item or successful repair.
-- **DisputeResolution:** Fallback mechanisms for handling contested swaps. Admin multi-sig intervention layer.
+
+### VeloxousEscrow (⚡ **New Implementation**)
+Complete state machine implementation with 7 strict lifecycle states: `AwaitingFunds → Funded → Shipped → Delivered → Completed | Disputed → Refunded`.
+
+**Features:**
+- Strict linear state machine with zero-ambiguity state checks
+- Timeout-based auto-refund (7 days) and auto-release (14 days)
+- Dispute flow with admin resolution
+- Protocol fee routing (1.5% BPS) with fixed-point arithmetic
+- Check-Effects-Interactions pattern for security
+- 23 unit tests achieving >95% coverage
+
+See [`contracts/veloxous_escrow/IMPLEMENTATION.md`](contracts/veloxous_escrow/IMPLEMENTATION.md) for full details.
+
+### MarketplaceEscrow
+Advanced escrow with multisig admin governance (M-of-N threshold voting), dispute resolution with proposal voting, fee pool accumulation, and optional reputation contract integration.
+
+### Treasury
+Fee routing engine with configurable BPS-based fees (max 5%) and treasury wallet splits. Supports fixed-point arithmetic for precision fee distribution.
+
+### Admin
+Standalone M-of-N multisig admin contract with threshold voting for admin rotation.
 
 ## 🛠 Tech Stack
 - **Language:** Rust
