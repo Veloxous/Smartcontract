@@ -26,14 +26,15 @@ AwaitingFunds → Funded → Shipped → Delivered → Completed
 
 ### Initialization
 
-- **`init(admin, accepted_asset, treasury_contract?)`**  
-  One-time setup. Sets admin, accepted USDC asset address, and optional treasury for fee routing.
+- **`init(admin, accepted_asset, treasury_contract?, vault_contract?)`**  
+  One-time setup. Sets admin, accepted USDC asset address, optional treasury for fee routing, and an optional yield [`vault`](../vault) contract that puts idle collateral to work between `fund_escrow` and release.
 
 ### Deposit & Lock
 
 - **`fund_escrow(buyer, seller, asset, amount, transaction_id)`**  
   Buyer deposits exact expected USDC. Validates asset matches strictly. Transfers via `token::Client`. Updates state to `Funded`.  
-  **Check-Effects-Interactions pattern:** State written before external token transfer.
+  **Check-Effects-Interactions pattern:** State written before external token transfer.  
+  If a vault is configured, the deposited collateral is immediately forwarded into it (see [Yield Vault Integration](#yield-vault-integration)).
 
 ### Shipping & Delivery
 
@@ -95,6 +96,7 @@ AwaitingFunds → Funded → Shipped → Delivered → Completed
 | 11 | `NotInitialized` | Contract not initialized |
 | 12 | `Overflow` | Integer overflow in calculation |
 | 13 | `InvalidAmount` | Amount ≤ 0 |
+| 14 | `VaultCallFailed` | The configured vault contract failed while depositing/withdrawing collateral |
 
 ## Event Emission
 
@@ -105,9 +107,35 @@ All events use structured topics for indexing:
 - **`FundsReleased`** — `[transaction_id, seller, seller_amount, fee_amount]`
 - **`FundsRefunded`** — `[transaction_id, buyer, amount, timestamp]`
 
+## Yield Vault Integration
+
+An optional [`vault`](../vault) contract can be wired in at `init` to put idle escrow
+collateral to work instead of letting it sit unused between `fund_escrow` and release.
+
+- **On `fund_escrow`**: once the buyer's USDC lands in this contract, it is forwarded
+  to the vault, which in turn attempts to deposit it into a configured external
+  yield-bearing protocol.
+- **On any exit path** (`release_funds`, `auto_release`, `auto_refund`,
+  `resolve_dispute`): the escrow pulls its principal back from the vault *before*
+  running its existing seller/buyer transfer logic, which is otherwise unchanged.
+  Any yield earned in the meantime is routed by the vault straight to its own
+  treasury — it never passes through this contract.
+- **Circuit breaker**: if the yield protocol is unreachable, paused, or otherwise
+  fails, the vault never takes custody at all — it bounces the deposit straight
+  back within the same call, so the USDC ends up held directly in *this* escrow
+  contract, exactly as if no vault had been configured. `fund_escrow` never fails
+  because the yield protocol is down. A failure calling the *vault contract
+  itself* (e.g. misconfiguration) surfaces here as `Error::VaultCallFailed`.
+- Omitting `vault_contract` at `init` fully preserves the original behavior:
+  collateral just sits in this contract's own balance, as before.
+
+See [`contracts/vault/src/lib.rs`](../vault/src/lib.rs) for the vault's own deposit/withdraw
+logic and circuit breaker implementation.
+
 ## Testing
 
-**23 unit tests covering >95% of state machine logic:**
+**25 unit tests covering >95% of state machine logic** (plus 8 more in the `vault` crate
+covering the yield vault in isolation):
 
 ✅ Valid lifecycle: AwaitingFunds → Funded → Shipped → Delivered → Completed  
 ✅ Invalid transitions: Funded → Delivered (skips Shipped), Delivered → Shipped  
@@ -116,6 +144,8 @@ All events use structured topics for indexing:
 ✅ Asset validation: Wrong asset, zero amount, duplicate transaction_id  
 ✅ Authorization: Buyer/seller role checks, admin-only dispute resolution  
 ✅ Fee calculation: Fixed-point arithmetic, rounding down  
+✅ Yield vault: full Fund → Release lifecycle routes earned yield to treasury  
+✅ Yield vault: circuit breaker falls back gracefully when the yield protocol fails, without losing funds  
 
 All tests use `try_*` methods to validate error codes without panic string matching (Soroban SDK wraps errors in `HostError`).
 

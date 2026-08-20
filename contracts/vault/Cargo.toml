@@ -1,5 +1,5 @@
 [package]
-name = "veloxous_escrow"
+name = "vault"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,5 +11,4 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-vault = { path = "../vault" }
 treasury = { path = "../treasury" }

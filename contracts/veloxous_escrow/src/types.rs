@@ -57,6 +57,8 @@ pub enum DataKey {
     Admin,
     TreasuryContract,
     AcceptedAsset,
+    /// Optional yield vault that holds idle collateral between fund and release.
+    VaultContract,
     Initialized,
     /// Persistent per-escrow record keyed by transaction_id
     Escrow(String),
@@ -94,4 +96,6 @@ pub enum Error {
     Overflow = 12,
     /// The provided amount is invalid (≤ 0).
     InvalidAmount = 13,
+    /// The configured vault contract failed while depositing or withdrawing collateral.
+    VaultCallFailed = 14,
 }

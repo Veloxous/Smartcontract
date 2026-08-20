@@ -52,6 +52,9 @@ Advanced escrow with multisig admin governance (M-of-N threshold voting), disput
 ### Treasury
 Fee routing engine with configurable BPS-based fees (max 5%) and treasury wallet splits. Supports fixed-point arithmetic for precision fee distribution.
 
+### Vault
+Optional yield vault for `VeloxousEscrow`. Holds idle collateral between `fund_escrow` and release, forwarding it into an external yield-bearing protocol when configured. Ships a circuit breaker: any failure talking to that protocol bounces the deposit straight back to the escrow contract, which ends up holding its own collateral directly — a deposit never fails just because the yield protocol is unavailable. Earned yield is routed to a treasury on withdrawal; principal always returns to the escrow untouched.
+
 ### Admin
 Standalone M-of-N multisig admin contract with threshold voting for admin rotation.
 
