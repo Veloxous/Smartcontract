@@ -353,6 +353,15 @@ impl VeloxousEscrow {
         batch::batch_release(&env, &admin, transaction_ids)
     }
 
+    /// Execute batch release for a vector of u64 transaction IDs.
+    pub fn batch_release_u64(
+        env: Env,
+        admin: Address,
+        transaction_ids: Vec<u64>,
+    ) -> Result<(u32, u32), Error> {
+        batch::batch_release_u64(&env, &admin, transaction_ids)
+    }
+
     // ── Timeouts ──────────────────────────────────────────────────────────────
 
     /// Auto-refund the buyer if the seller never marks the item as Shipped within
