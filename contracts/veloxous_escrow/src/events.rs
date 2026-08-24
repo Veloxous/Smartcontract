@@ -49,6 +49,16 @@ pub struct FundsRefunded {
     pub timestamp: u64,
 }
 
+/// Emitted when an escrow in a batch release is skipped due to invalid state or dispute.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchReleaseSkipped {
+    #[topic]
+    pub transaction_id: String,
+    pub error_code: u32,
+    pub timestamp: u64,
+}
+
 pub fn emit_funded(env: &Env, transaction_id: String, buyer: Address, amount: i128, asset: Address) {
     Funded { transaction_id, buyer, amount, asset }.publish(env);
 }
