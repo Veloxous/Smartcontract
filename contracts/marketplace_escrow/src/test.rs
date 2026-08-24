@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    contract, contractimpl, testutils::Address as _, token, Address, BytesN, Env, String, Vec,
+    contract, contractimpl, testutils::{Address as _, Ledger}, token, Address, BytesN, Env, String, Vec,
 };
 
 #[soroban_sdk::contractevent]
@@ -406,3 +406,186 @@ fn test_double_sweep_prevention() {
     // Second sweep should panic with "fee pool empty"
     escrow_client.sweep_fees(&token_addr);
 }
+
+// ===========================================================================
+// Dutch Auction Tests
+// ===========================================================================
+
+/// Helper: advance ledger timestamp by `delta_secs` seconds.
+fn advance_time(env: &Env, delta_secs: u64) {
+    env.ledger().with_mut(|li| {
+        li.timestamp = li.timestamp.saturating_add(delta_secs);
+    });
+}
+
+/// Issue requirement: fast-forward ledger to 50% of auction duration and
+/// assert the current price is the midpoint between start_price and end_price.
+#[test]
+fn test_dutch_auction_midpoint_price() {
+    let env = Env::default();
+    let (escrow_client, token_addr, _token_client, _token_admin, _admins, _buyer, seller, _rep) =
+        setup_test(&env);
+
+    let listing_id = String::from_str(&env, "auction_001");
+    let start_price: i128 = 10_000;
+    let end_price: i128 = 2_000;
+    let duration_secs: u64 = 1_000;
+
+    escrow_client.create_auction(
+        &listing_id,
+        &seller,
+        &token_addr,
+        &start_price,
+        &end_price,
+        &duration_secs,
+    );
+
+    // Price at t=0 must equal start_price.
+    let price_at_start = escrow_client.get_current_price(&listing_id);
+    assert_eq!(price_at_start, start_price);
+
+    // Advance to exactly 50% of the duration.
+    advance_time(&env, duration_secs / 2); // +500 s
+
+    let price_mid = escrow_client.get_current_price(&listing_id);
+    // midpoint = 10_000 - ((10_000 - 2_000) * 500 / 1_000) = 10_000 - 4_000 = 6_000
+    let expected_mid = start_price - ((start_price - end_price) * (duration_secs / 2) as i128
+        / duration_secs as i128);
+    assert_eq!(price_mid, expected_mid, "price at 50% should be midpoint");
+    assert_eq!(price_mid, 6_000);
+}
+
+/// Issue requirement: assert that buy_now after auction expiry panics with "AuctionExpired".
+#[test]
+#[should_panic(expected = "AuctionExpired")]
+fn test_buy_now_after_expiry_panics() {
+    let env = Env::default();
+    let (escrow_client, token_addr, _token_client, token_admin, _admins, buyer, seller, _rep) =
+        setup_test(&env);
+
+    let listing_id = String::from_str(&env, "auction_002");
+    let start_price: i128 = 5_000;
+    let end_price: i128 = 1_000;
+    let duration_secs: u64 = 600;
+
+    escrow_client.create_auction(
+        &listing_id,
+        &seller,
+        &token_addr,
+        &start_price,
+        &end_price,
+        &duration_secs,
+    );
+
+    // Fund buyer generously.
+    token_admin.mint(&buyer, &10_000);
+
+    // Fast-forward past the full duration.
+    advance_time(&env, duration_secs + 1); // 601 s — auction is expired
+
+    // This must panic with "AuctionExpired".
+    escrow_client.buy_now(&listing_id, &buyer);
+}
+
+/// Happy path: buyer calls buy_now before expiry; USDC is locked in the contract
+/// at the exact captured price, and auction moves to Sold.
+#[test]
+fn test_buy_now_success_transfers_usdc_and_closes_auction() {
+    let env = Env::default();
+    let (escrow_client, token_addr, token_client, token_admin, _admins, buyer, seller, _rep) =
+        setup_test(&env);
+
+    let listing_id = String::from_str(&env, "auction_003");
+    let start_price: i128 = 8_000;
+    let end_price: i128 = 2_000;
+    let duration_secs: u64 = 1_000;
+
+    escrow_client.create_auction(
+        &listing_id,
+        &seller,
+        &token_addr,
+        &start_price,
+        &end_price,
+        &duration_secs,
+    );
+
+    // Advance to 25% of duration → price = 8_000 - (6_000 * 250 / 1_000) = 8_000 - 1_500 = 6_500.
+    advance_time(&env, 250);
+    let expected_price: i128 = 6_500;
+    assert_eq!(escrow_client.get_current_price(&listing_id), expected_price);
+
+    token_admin.mint(&buyer, &expected_price);
+
+    escrow_client.buy_now(&listing_id, &buyer);
+
+    // Buyer's USDC balance should be 1000 (initial mint from setup_test, while the minted price amount is transferred to the contract).
+    assert_eq!(token_client.balance(&buyer), 1000);
+    // Contract holds the locked funds.
+    assert_eq!(token_client.balance(&escrow_client.address), expected_price);
+
+    // Auction state should be Sold with correct final_price.
+    let state = escrow_client.get_auction(&listing_id);
+    assert_eq!(state.status, types::AuctionStatus::Sold);
+    assert_eq!(state.final_price, Some(expected_price));
+    assert_eq!(state.buyer, Some(buyer));
+}
+
+/// Buying an already-sold auction must be rejected.
+#[test]
+#[should_panic(expected = "auction is not active")]
+fn test_cannot_buy_already_sold_auction() {
+    let env = Env::default();
+    let (escrow_client, token_addr, _token_client, token_admin, _admins, buyer, seller, _rep) =
+        setup_test(&env);
+
+    let listing_id = String::from_str(&env, "auction_004");
+
+    escrow_client.create_auction(
+        &listing_id,
+        &seller,
+        &token_addr,
+        &4_000,
+        &1_000,
+        &500,
+    );
+
+    token_admin.mint(&buyer, &8_000);
+
+    // First purchase succeeds.
+    escrow_client.buy_now(&listing_id, &buyer);
+
+    // Second purchase on the same, now-closed auction must panic.
+    let buyer2 = Address::generate(&env);
+    token_admin.mint(&buyer2, &8_000);
+    escrow_client.buy_now(&listing_id, &buyer2);
+}
+
+/// cancel_expired sets the auction to Expired and can be called by anyone.
+#[test]
+fn test_cancel_expired_sets_expired_state() {
+    let env = Env::default();
+    let (escrow_client, token_addr, _token_client, _token_admin, _admins, _buyer, seller, _rep) =
+        setup_test(&env);
+
+    let listing_id = String::from_str(&env, "auction_005");
+
+    escrow_client.create_auction(
+        &listing_id,
+        &seller,
+        &token_addr,
+        &3_000,
+        &500,
+        &200,
+    );
+
+    advance_time(&env, 201); // past deadline
+
+    // A random third party can call cancel_expired.
+    let anyone = Address::generate(&env);
+    let _ = anyone; // suppress unused-variable warning; auth is mocked globally
+    escrow_client.cancel_expired(&listing_id);
+
+    let state = escrow_client.get_auction(&listing_id);
+    assert_eq!(state.status, types::AuctionStatus::Expired);
+}
+
