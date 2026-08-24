@@ -1,9 +1,10 @@
 #![no_std]
 
+pub mod batch;
 pub mod events;
 pub mod types;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 use types::*;
 
 // ── Treasury client stub ──────────────────────────────────────────────────────
