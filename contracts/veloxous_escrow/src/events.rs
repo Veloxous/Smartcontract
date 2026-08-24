@@ -104,3 +104,12 @@ pub fn emit_funds_refunded(
 ) {
     FundsRefunded { transaction_id, buyer, amount, timestamp }.publish(env);
 }
+
+pub fn emit_batch_release_skipped(
+    env: &Env,
+    transaction_id: String,
+    error_code: u32,
+    timestamp: u64,
+) {
+    BatchReleaseSkipped { transaction_id, error_code, timestamp }.publish(env);
+}
