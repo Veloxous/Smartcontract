@@ -337,6 +337,22 @@ impl VeloxousEscrow {
         Ok(())
     }
 
+    // ── Phase 4.5 — Batch Release ─────────────────────────────────────────────
+
+    /// Execute batch release for a vector of String transaction IDs.
+    ///
+    /// Callable by Admin multisig.
+    /// Validates that each escrow exists and is in Delivered state before release.
+    /// If an escrow is invalid/disputed, it is skipped and an error event is emitted (batch does not revert).
+    /// Token transfers are aggregated to minimize instruction counts and ledger entries.
+    pub fn batch_release(
+        env: Env,
+        admin: Address,
+        transaction_ids: Vec<String>,
+    ) -> Result<(u32, u32), Error> {
+        batch::batch_release(&env, &admin, transaction_ids)
+    }
+
     // ── Timeouts ──────────────────────────────────────────────────────────────
 
     /// Auto-refund the buyer if the seller never marks the item as Shipped within
