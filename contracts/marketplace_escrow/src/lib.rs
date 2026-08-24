@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod auction;
 pub mod events;
 pub mod reputation;
 pub mod types;
@@ -628,6 +629,62 @@ impl MarketplaceEscrow {
             .instance()
             .get(&DataKey::Threshold)
             .unwrap_or(0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Dutch Auction entry points
+    // -----------------------------------------------------------------------
+
+    /// Create a new Dutch auction for a device listing.
+    ///
+    /// * `listing_id`    — unique identifier for the device listing.
+    /// * `seller`        — listing owner; must authorise this call.
+    /// * `usdc_asset`    — token contract address used for payment.
+    /// * `start_price`   — initial (highest) price in token base units.
+    /// * `end_price`     — floor price (must be <= start_price and > 0).
+    /// * `duration_secs` — seconds over which the price decays to `end_price`.
+    pub fn create_auction(
+        env: Env,
+        listing_id: String,
+        seller: Address,
+        usdc_asset: Address,
+        start_price: i128,
+        end_price: i128,
+        duration_secs: u64,
+    ) {
+        auction::create_auction(
+            &env,
+            listing_id,
+            seller,
+            usdc_asset,
+            start_price,
+            end_price,
+            duration_secs,
+        );
+    }
+
+    /// Query the current Dutch-auction price without modifying state.
+    pub fn get_current_price(env: Env, listing_id: String) -> i128 {
+        auction::get_current_price(&env, listing_id)
+    }
+
+    /// Purchase a listing at the current price, locking funds in escrow.
+    ///
+    /// Panics with `"AuctionExpired"` if the auction duration has elapsed.
+    pub fn buy_now(env: Env, listing_id: String, buyer: Address) {
+        auction::buy_now(&env, listing_id, buyer);
+    }
+
+    /// Mark an expired auction as `Expired` (permissionless — callable by anyone).
+    ///
+    /// Panics if the auction is not past its deadline or is not `Active`.
+    pub fn cancel_expired(env: Env, listing_id: String) {
+        auction::cancel_expired(&env, listing_id);
+    }
+
+    /// Read the full auction state for a listing.
+    pub fn get_auction(env: Env, listing_id: String) -> types::AuctionState {
+        auction::get_auction_state(&env, listing_id)
     }
 }
 

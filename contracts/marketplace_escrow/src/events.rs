@@ -186,3 +186,88 @@ pub fn emit_fee_collected(
     }
     .publish(env);
 }
+
+// ---------------------------------------------------------------------------
+// Dutch Auction Events
+// ---------------------------------------------------------------------------
+
+/// Emitted when a new Dutch auction is created for a listing.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionCreated {
+    #[topic]
+    pub listing_id: String,
+    pub seller: Address,
+    pub usdc_asset: Address,
+    pub start_price: i128,
+    pub end_price: i128,
+    pub duration_secs: u64,
+    pub start_time: u64,
+}
+
+/// Emitted when a buyer successfully purchases via buy_now.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionBought {
+    #[topic]
+    pub listing_id: String,
+    pub buyer: Address,
+    pub final_price: i128,
+    pub timestamp: u64,
+}
+
+/// Emitted when an auction expires without a buyer (cancel_expired or buy_now after deadline).
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionExpired {
+    #[topic]
+    pub listing_id: String,
+    pub expired_at: u64,
+}
+
+pub fn emit_auction_created(
+    env: &Env,
+    listing_id: String,
+    seller: Address,
+    usdc_asset: Address,
+    start_price: i128,
+    end_price: i128,
+    duration_secs: u64,
+    start_time: u64,
+) {
+    AuctionCreated {
+        listing_id,
+        seller,
+        usdc_asset,
+        start_price,
+        end_price,
+        duration_secs,
+        start_time,
+    }
+    .publish(env);
+}
+
+pub fn emit_auction_bought(
+    env: &Env,
+    listing_id: String,
+    buyer: Address,
+    final_price: i128,
+    timestamp: u64,
+) {
+    AuctionBought {
+        listing_id,
+        buyer,
+        final_price,
+        timestamp,
+    }
+    .publish(env);
+}
+
+pub fn emit_auction_expired(env: &Env, listing_id: String, expired_at: u64) {
+    AuctionExpired {
+        listing_id,
+        expired_at,
+    }
+    .publish(env);
+}
+

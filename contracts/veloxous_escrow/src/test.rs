@@ -2,6 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{Address as _, Ledger},
     token, Address, Env, String,
 };
@@ -42,8 +43,8 @@ fn setup<'a>(
     let buyer = Address::generate(env);
     let seller = Address::generate(env);
 
-    // Initialize with accepted asset, no treasury
-    client.init(&admin, &token_client.address, &None);
+    // Initialize with accepted asset, no treasury, no vault
+    client.init(&admin, &token_client.address, &None, &None);
 
     // Mint 10000 tokens to buyer
     token_admin_client.mint(&buyer, &10_000);
@@ -458,7 +459,7 @@ fn test_full_lifecycle_with_events() {
     let buyer = Address::generate(&env);
     let seller = Address::generate(&env);
 
-    client.init(&admin, &token_client.address, &None);
+    client.init(&admin, &token_client.address, &None, &None);
     token_admin_client.mint(&buyer, &10_000);
 
     let tx_id = String::from_str(&env, "tx_events");
@@ -480,6 +481,173 @@ fn test_double_init_rejected() {
     let (escrow_client, token_addr, _token_client, _token_admin, admin, _buyer, _seller) = setup(&env);
 
     // Error::AlreadyInitialized (#10)
-    let result = escrow_client.try_init(&admin, &token_addr, &None);
+    let result = escrow_client.try_init(&admin, &token_addr, &None, &None);
     assert!(result.is_err());
+}
+
+// ── Yield vault integration ─────────────────────────────────────────────────
+
+/// A working yield protocol: quotes 1:1 shares, returns principal plus a
+/// flat 10% bonus on withdrawal (backed by real tokens minted to it up front).
+#[contract]
+pub struct MockYieldProtocol;
+
+#[contractimpl]
+impl MockYieldProtocol {
+    pub fn deposit(_env: Env, _asset: Address, amount: i128) -> i128 {
+        amount
+    }
+
+    pub fn withdraw(env: Env, to: Address, asset: Address, shares: i128) -> i128 {
+        let total = shares + shares / 10;
+        let protocol_addr = env.current_contract_address();
+        token::Client::new(&env, &asset).transfer(&protocol_addr, &to, &total);
+        total
+    }
+}
+
+/// A protocol that is simply unavailable — every call traps.
+#[contract]
+pub struct MockFailingYieldProtocol;
+
+#[contractimpl]
+impl MockFailingYieldProtocol {
+    pub fn deposit(_env: Env, _asset: Address, _amount: i128) -> i128 {
+        panic!("yield protocol unavailable");
+    }
+
+    pub fn withdraw(_env: Env, _to: Address, _asset: Address, _shares: i128) -> i128 {
+        panic!("yield protocol unavailable");
+    }
+}
+
+/// Sets up an escrow wired to a vault contract, whose optional yield
+/// protocol is provided by the caller (`None` exercises the "no protocol
+/// configured" circuit-breaker path).
+fn setup_with_vault<'a>(
+    env: &'a Env,
+    yield_protocol: Option<Address>,
+) -> (
+    VeloxousEscrowClient<'a>,
+    Address,           // token address
+    token::Client<'a>,
+    token::StellarAssetClient<'a>,
+    Address,           // buyer
+    Address,           // seller
+    Address,           // vault treasury wallet (where routed yield actually lands)
+    Address,           // vault contract address
+) {
+    env.mock_all_auths();
+
+    let escrow_id = env.register(VeloxousEscrow, ());
+    let escrow_client = VeloxousEscrowClient::new(env, &escrow_id);
+
+    let token_admin = Address::generate(env);
+    let (token_client, token_admin_client) = create_token_contract(env, &token_admin);
+
+    let admin = Address::generate(env);
+    let buyer = Address::generate(env);
+    let seller = Address::generate(env);
+
+    // Real treasury contract (100% split to a single wallet) so the vault's
+    // yield-routing `route_fee` cross-call has something to actually invoke.
+    let vault_treasury_wallet = Address::generate(env);
+    let vault_treasury_id = env.register(treasury::TreasuryContract, ());
+    let vault_treasury_client = treasury::TreasuryContractClient::new(env, &vault_treasury_id);
+    let mut splits = soroban_sdk::Vec::new(env);
+    splits.push_back(treasury::types::TreasurySplit {
+        wallet: vault_treasury_wallet.clone(),
+        share_bps: 10_000,
+    });
+    vault_treasury_client.init(&admin, &0u32, &splits);
+
+    let vault_id = env.register(vault::VaultContract, ());
+    let vault_client = vault::VaultContractClient::new(env, &vault_id);
+    vault_client.init(&admin, &escrow_id, &Some(vault_treasury_id), &yield_protocol);
+
+    // No treasury configured on the escrow itself: protocol fee stays in the
+    // escrow contract, same as the existing no-treasury tests. This test
+    // suite is only concerned with the vault/yield path.
+    escrow_client.init(&admin, &token_client.address, &None, &Some(vault_id.clone()));
+
+    token_admin_client.mint(&buyer, &10_000);
+
+    (escrow_client, token_client.address.clone(), token_client, token_admin_client, buyer, seller, vault_treasury_wallet, vault_id)
+}
+
+/// Full escrow lifecycle (Fund -> Ship -> Deliver -> Release) with a healthy
+/// mocked yield protocol: asserts collateral is forwarded into the vault
+/// while funded, and that earned yield is routed to the vault's treasury on
+/// release while the seller still receives their full net amount.
+#[test]
+fn test_vault_lifecycle_routes_yield_to_treasury_on_release() {
+    let env = Env::default();
+    let protocol_id = env.register(MockYieldProtocol, ());
+
+    let (escrow_client, token_addr, token_client, mint_client, buyer, seller, vault_treasury, vault_id) =
+        setup_with_vault(&env, Some(protocol_id.clone()));
+
+    // Fund the protocol with enough extra tokens to cover the 10% yield bonus.
+    mint_client.mint(&protocol_id, &100);
+
+    let tx_id = String::from_str(&env, "tx_vault_lifecycle");
+    let amount: i128 = 1000;
+
+    escrow_client.fund_escrow(&buyer, &seller, &token_addr, &amount, &tx_id);
+    // Collateral left the escrow for the protocol, passing through the vault
+    // (which itself ends up holding nothing — it forwarded everything on).
+    assert_eq!(token_client.balance(&escrow_client.address), 0);
+    assert_eq!(token_client.balance(&vault_id), 0);
+    assert_eq!(token_client.balance(&protocol_id), 1100);
+
+    escrow_client.mark_shipped(&seller, &tx_id);
+    escrow_client.mark_delivered(&buyer, &tx_id);
+    escrow_client.release_funds(&buyer, &tx_id);
+
+    let record = escrow_client.get_escrow(&tx_id);
+    assert_eq!(record.current_state, EscrowStatus::Completed);
+
+    // Fee = 1.5% of 1000 = 15, seller nets 985 (unaffected by the vault detour).
+    assert_eq!(token_client.balance(&seller), 985);
+    // No treasury configured on the escrow itself, so the fee sits in escrow.
+    assert_eq!(token_client.balance(&escrow_client.address), 15);
+    // The 100 units of yield earned went straight to the vault's treasury.
+    assert_eq!(token_client.balance(&vault_treasury), 100);
+}
+
+/// Mock the yield protocol returning an error: the circuit breaker must fall
+/// back gracefully and the full escrow lifecycle must still complete without
+/// losing user funds.
+#[test]
+fn test_vault_circuit_breaker_fallback_completes_lifecycle_without_losing_funds() {
+    let env = Env::default();
+    let failing_protocol_id = env.register(MockFailingYieldProtocol, ());
+
+    let (escrow_client, token_addr, token_client, _mint, buyer, seller, vault_treasury, vault_id) =
+        setup_with_vault(&env, Some(failing_protocol_id.clone()));
+
+    let tx_id = String::from_str(&env, "tx_vault_circuit_breaker");
+    let amount: i128 = 1000;
+
+    escrow_client.fund_escrow(&buyer, &seller, &token_addr, &amount, &tx_id);
+    // Circuit breaker tripped: per spec, the vault never takes custody and
+    // bounces the deposit straight back — the USDC ends up held directly in
+    // the escrow contract itself (not the vault, and not the unavailable
+    // protocol).
+    assert_eq!(token_client.balance(&escrow_client.address), amount);
+    assert_eq!(token_client.balance(&vault_id), 0);
+    assert_eq!(token_client.balance(&failing_protocol_id), 0);
+
+    escrow_client.mark_shipped(&seller, &tx_id);
+    escrow_client.mark_delivered(&buyer, &tx_id);
+    escrow_client.release_funds(&buyer, &tx_id);
+
+    let record = escrow_client.get_escrow(&tx_id);
+    assert_eq!(record.current_state, EscrowStatus::Completed);
+
+    // Full lifecycle still completes correctly: seller nets 985 after the
+    // 1.5% fee, and since no yield was ever earned, the treasury gets nothing.
+    assert_eq!(token_client.balance(&seller), 985);
+    assert_eq!(token_client.balance(&escrow_client.address), 15);
+    assert_eq!(token_client.balance(&vault_treasury), 0);
 }
