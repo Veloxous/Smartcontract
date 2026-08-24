@@ -59,6 +59,17 @@ pub struct BatchReleaseSkipped {
     pub timestamp: u64,
 }
 
+/// Emitted when a batch release operation finishes execution.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchReleaseCompleted {
+    pub processed_count: u32,
+    pub skipped_count: u32,
+    pub total_released: i128,
+    pub total_fee: i128,
+    pub timestamp: u64,
+}
+
 pub fn emit_funded(env: &Env, transaction_id: String, buyer: Address, amount: i128, asset: Address) {
     Funded { transaction_id, buyer, amount, asset }.publish(env);
 }
