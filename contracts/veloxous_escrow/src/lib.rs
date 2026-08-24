@@ -21,6 +21,43 @@ mod treasury_client {
 
 use treasury_client::TreasuryClient;
 
+// ── Vault client stub ────────────────────────────────────────────────────────
+
+/// Thin cross-contract client for the Veloxous yield Vault.
+///
+/// Declared locally (rather than depending on the `vault` crate directly)
+/// so this contract's own `#[contract]` build never links against another
+/// contract's exported entry points — two `#[contractimpl]` blocks sharing a
+/// function name like `init` in the same wasm binary is a hard link error.
+mod vault_client {
+    use soroban_sdk::{contractclient, contracterror, Address, Env, String};
+
+    #[contracterror]
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+    #[repr(u32)]
+    pub enum VaultError {
+        Unauthorized = 3,
+        NotFound = 6,
+        AlreadyWithdrawn = 7,
+        YieldProtocolUnavailable = 9,
+    }
+
+    #[contractclient(name = "VaultClient")]
+    pub trait VaultTrait {
+        fn deposit(
+            env: Env,
+            escrow: Address,
+            asset: Address,
+            amount: i128,
+            transaction_id: String,
+        ) -> Result<(), VaultError>;
+
+        fn withdraw(env: Env, escrow: Address, transaction_id: String) -> Result<(i128, i128), VaultError>;
+    }
+}
+
+use vault_client::VaultClient;
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -37,11 +74,14 @@ impl VeloxousEscrow {
     /// * `admin`             - Multisig or single admin address.
     /// * `accepted_asset`    - Strictly accepted USDC token address on Stellar.
     /// * `treasury_contract` - Optional treasury contract for protocol fee routing.
+    /// * `vault_contract`    - Optional yield vault that holds idle collateral between
+    ///                         `fund_escrow` and the escrow's eventual release/refund.
     pub fn init(
         env: Env,
         admin: Address,
         accepted_asset: Address,
         treasury_contract: Option<Address>,
+        vault_contract: Option<Address>,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(Error::AlreadyInitialized);
@@ -54,6 +94,9 @@ impl VeloxousEscrow {
 
         if let Some(treasury) = treasury_contract {
             env.storage().instance().set(&DataKey::TreasuryContract, &treasury);
+        }
+        if let Some(vault) = vault_contract {
+            env.storage().instance().set(&DataKey::VaultContract, &vault);
         }
 
         env.storage().instance().set(&DataKey::Initialized, &true);
@@ -122,6 +165,9 @@ impl VeloxousEscrow {
         // 2. Interactions: external token transfer
         let contract_addr = env.current_contract_address();
         token::Client::new(&env, &asset).transfer(&buyer, &contract_addr, &amount);
+
+        // Forward idle collateral into the yield vault, if one is configured.
+        Self::vault_deposit_if_configured(&env, &asset, amount, &transaction_id)?;
 
         // 3. Events
         events::emit_funded(&env, transaction_id.clone(), buyer, amount, asset);
@@ -259,7 +305,9 @@ impl VeloxousEscrow {
         record.updated_at = now;
         env.storage().persistent().set(&key, &record);
 
-        // 2. Interactions: token transfers
+        // 2. Interactions: pull collateral back from the vault (if any), then transfer
+        Self::vault_withdraw_if_configured(&env, &transaction_id)?;
+
         let contract_addr = env.current_contract_address();
         let token_client = token::Client::new(&env, &record.asset);
 
@@ -321,6 +369,8 @@ impl VeloxousEscrow {
         record.updated_at = now;
         env.storage().persistent().set(&key, &record);
 
+        Self::vault_withdraw_if_configured(&env, &transaction_id)?;
+
         token::Client::new(&env, &record.asset).transfer(
             &env.current_contract_address(),
             &record.buyer,
@@ -369,6 +419,8 @@ impl VeloxousEscrow {
         record.current_state = EscrowStatus::Completed;
         record.updated_at = now;
         env.storage().persistent().set(&key, &record);
+
+        Self::vault_withdraw_if_configured(&env, &transaction_id)?;
 
         let contract_addr = env.current_contract_address();
         let token_client = token::Client::new(&env, &record.asset);
@@ -459,6 +511,8 @@ impl VeloxousEscrow {
         let now = env.ledger().timestamp();
         let contract_addr = env.current_contract_address();
         let token_client = token::Client::new(&env, &record.asset);
+
+        Self::vault_withdraw_if_configured(&env, &transaction_id)?;
 
         if release_to_seller {
             let fee = record
@@ -565,6 +619,52 @@ impl VeloxousEscrow {
             .get::<DataKey, Address>(&DataKey::Admin)
             .map(|admin| admin == *address)
             .unwrap_or(false)
+    }
+
+    /// If a yield vault is configured, forward `amount` of `asset` (already
+    /// sitting in this contract's own balance) into it. The vault's own
+    /// circuit breaker handles the case where the external yield protocol is
+    /// unavailable; a failure here only means the vault contract itself
+    /// (misconfiguration, etc.) is unreachable, which is surfaced as
+    /// `Error::VaultCallFailed` rather than silently swallowed.
+    fn vault_deposit_if_configured(
+        env: &Env,
+        asset: &Address,
+        amount: i128,
+        transaction_id: &String,
+    ) -> Result<(), Error> {
+        if let Some(vault_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::VaultContract)
+        {
+            let contract_addr = env.current_contract_address();
+            token::Client::new(env, asset).transfer(&contract_addr, &vault_addr, &amount);
+            VaultClient::new(env, &vault_addr)
+                .try_deposit(&contract_addr, asset, &amount, transaction_id)
+                .map_err(|_| Error::VaultCallFailed)?
+                .map_err(|_| Error::VaultCallFailed)?;
+        }
+        Ok(())
+    }
+
+    /// If a yield vault is configured, pull this escrow's principal (plus
+    /// any earned yield, which the vault routes straight to the treasury)
+    /// back into this contract's own balance so the existing seller/buyer
+    /// transfer logic can run unchanged.
+    fn vault_withdraw_if_configured(env: &Env, transaction_id: &String) -> Result<(), Error> {
+        if let Some(vault_addr) = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::VaultContract)
+        {
+            let contract_addr = env.current_contract_address();
+            VaultClient::new(env, &vault_addr)
+                .try_withdraw(&contract_addr, transaction_id)
+                .map_err(|_| Error::VaultCallFailed)?
+                .map_err(|_| Error::VaultCallFailed)?;
+        }
+        Ok(())
     }
 }
 
