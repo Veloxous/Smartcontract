@@ -113,3 +113,21 @@ pub fn emit_batch_release_skipped(
 ) {
     BatchReleaseSkipped { transaction_id, error_code, timestamp }.publish(env);
 }
+
+pub fn emit_batch_release_completed(
+    env: &Env,
+    processed_count: u32,
+    skipped_count: u32,
+    total_released: i128,
+    total_fee: i128,
+    timestamp: u64,
+) {
+    BatchReleaseCompleted {
+        processed_count,
+        skipped_count,
+        total_released,
+        total_fee,
+        timestamp,
+    }
+    .publish(env);
+}
