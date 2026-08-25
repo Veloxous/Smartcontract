@@ -1,5 +1,6 @@
 #![no_std]
 
+use shared::auth;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, String
 };
@@ -12,9 +13,6 @@ use metadata::{SbtMetadata, SbtMetadataState};
 #[repr(u32)]
 pub enum Error {
     TokenNonTransferable = 1,
-    Unauthorized = 2,
-    AlreadyInitialized = 3,
-    NotInitialized = 4,
     InvalidMinimumValue = 5,
     MetadataStateInvalid = 6,
     VersionMismatch = 7,
@@ -43,8 +41,6 @@ pub struct TrustScore {
 
 #[contracttype]
 pub enum DataKey {
-    Admin,
-    AuthorizedContracts(Address),
     Score(Address),
     Balance(Address),
     Metadata(Address),
@@ -78,44 +74,17 @@ pub struct ReputationContract;
 #[contractimpl]
 impl ReputationContract {
     pub fn init(env: Env, admin: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
-        }
-        env.storage().instance().set(&DataKey::Admin, &admin);
+        auth::init_admin(&env, &admin);
         bump_instance(&env);
     }
 
     pub fn add_authorized_contract(env: Env, admin: Address, contract: Address) {
-        admin.require_auth();
-        let current_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
-        if admin != current_admin {
-            panic_with_error!(&env, Error::Unauthorized);
-        }
-        
-        env.storage()
-            .instance()
-            .set(&DataKey::AuthorizedContracts(contract), &true);
+        auth::add_authorized_contract(&env, &admin, &contract);
         bump_instance(&env);
     }
 
     pub fn remove_authorized_contract(env: Env, admin: Address, contract: Address) {
-        admin.require_auth();
-        let current_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
-        if admin != current_admin {
-            panic_with_error!(&env, Error::Unauthorized);
-        }
-        
-        env.storage()
-            .instance()
-            .remove(&DataKey::AuthorizedContracts(contract));
+        auth::remove_authorized_contract(&env, &admin, &contract);
         bump_instance(&env);
     }
 
@@ -125,20 +94,11 @@ impl ReputationContract {
         caller.require_auth();
         bump_instance(&env);
 
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
-
-        let is_auth = env
-            .storage()
-            .instance()
-            .get(&DataKey::AuthorizedContracts(caller.clone()))
-            .unwrap_or(false);
+        let admin = auth::get_admin(&env);
+        let is_auth = auth::is_authorized_contract(&env, &caller);
 
         if caller != admin && !is_auth {
-            panic_with_error!(&env, Error::Unauthorized);
+            panic_with_error!(&env, auth::AuthError::Unauthorized);
         }
 
         // Only mint if not already minted
@@ -172,18 +132,9 @@ impl ReputationContract {
         tx_value: i128,
         min_value: i128,
     ) {
-        caller.require_auth();
         bump_instance(&env);
 
-        let is_auth = env
-            .storage()
-            .instance()
-            .get(&DataKey::AuthorizedContracts(caller.clone()))
-            .unwrap_or(false);
-
-        if !is_auth {
-            panic_with_error!(&env, Error::Unauthorized);
-        }
+        auth::require_authorized_contract(&env, &caller);
 
         if tx_value < min_value {
             // Ignore transaction for score if below minimum value to prevent sybil farming

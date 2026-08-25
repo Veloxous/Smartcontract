@@ -8,6 +8,7 @@ members = [
     "contracts/treasury",
     "contracts/veloxous_escrow",
     "contracts/reputation",
+    "contracts/shared",
     "contracts/vault",
 ]
 

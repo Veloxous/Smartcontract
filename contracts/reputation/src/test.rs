@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::{Error, ReputationContract, ReputationContractClient, Tier};
+use crate::{ReputationContract, ReputationContractClient, Tier};
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
 fn setup_test() -> (Env, ReputationContractClient<'static>, Address, Address) {
