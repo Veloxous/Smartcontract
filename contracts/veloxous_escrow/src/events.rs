@@ -49,6 +49,27 @@ pub struct FundsRefunded {
     pub timestamp: u64,
 }
 
+/// Emitted when an escrow in a batch release is skipped due to invalid state or dispute.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchReleaseSkipped {
+    #[topic]
+    pub transaction_id: String,
+    pub error_code: u32,
+    pub timestamp: u64,
+}
+
+/// Emitted when a batch release operation finishes execution.
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchReleaseCompleted {
+    pub processed_count: u32,
+    pub skipped_count: u32,
+    pub total_released: i128,
+    pub total_fee: i128,
+    pub timestamp: u64,
+}
+
 pub fn emit_funded(env: &Env, transaction_id: String, buyer: Address, amount: i128, asset: Address) {
     Funded { transaction_id, buyer, amount, asset }.publish(env);
 }
@@ -82,4 +103,31 @@ pub fn emit_funds_refunded(
     timestamp: u64,
 ) {
     FundsRefunded { transaction_id, buyer, amount, timestamp }.publish(env);
+}
+
+pub fn emit_batch_release_skipped(
+    env: &Env,
+    transaction_id: String,
+    error_code: u32,
+    timestamp: u64,
+) {
+    BatchReleaseSkipped { transaction_id, error_code, timestamp }.publish(env);
+}
+
+pub fn emit_batch_release_completed(
+    env: &Env,
+    processed_count: u32,
+    skipped_count: u32,
+    total_released: i128,
+    total_fee: i128,
+    timestamp: u64,
+) {
+    BatchReleaseCompleted {
+        processed_count,
+        skipped_count,
+        total_released,
+        total_fee,
+        timestamp,
+    }
+    .publish(env);
 }

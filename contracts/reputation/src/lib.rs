@@ -4,6 +4,9 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, String
 };
 
+pub mod metadata;
+use metadata::{SbtMetadata, SbtMetadataState};
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -13,6 +16,10 @@ pub enum Error {
     AlreadyInitialized = 3,
     NotInitialized = 4,
     InvalidMinimumValue = 5,
+    MetadataStateInvalid = 6,
+    VersionMismatch = 7,
+    MetadataAlreadyInitialized = 8,
+    MetadataNotFound = 9,
 }
 
 #[contracttype]
@@ -40,6 +47,7 @@ pub enum DataKey {
     AuthorizedContracts(Address),
     Score(Address),
     Balance(Address),
+    Metadata(Address),
 }
 
 // 30 days assuming ~5s per ledger
@@ -145,6 +153,11 @@ impl ReputationContract {
                 score_tier: Tier::Unverified,
             });
             bump_score(&env, &user);
+            
+            // Auto-initialize default metadata if not initialized
+            if !env.storage().persistent().has(&DataKey::Metadata(user.clone())) {
+                let _ = metadata::init_metadata(&env, &user, String::from_str(&env, "ipfs://default_sbt_metadata"));
+            }
         }
     }
 
@@ -283,6 +296,95 @@ impl ReputationContract {
 
     pub fn symbol(env: Env) -> String {
         String::from_str(&env, "VREP")
+    }
+
+    // --- Dynamic SBT Metadata (Phase 3) ---
+
+    pub fn init_metadata(
+        env: Env,
+        caller: Address,
+        user: Address,
+        uri: String,
+    ) -> Result<SbtMetadata, Error> {
+        caller.require_auth();
+        bump_instance(&env);
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        let is_auth = env
+            .storage()
+            .instance()
+            .get(&DataKey::AuthorizedContracts(caller.clone()))
+            .unwrap_or(false);
+
+        if caller != admin && !is_auth {
+            return Err(Error::Unauthorized);
+        }
+
+        metadata::init_metadata(&env, &user, uri)
+    }
+
+    pub fn update_metadata(
+        env: Env,
+        caller: Address,
+        user: Address,
+        new_uri: String,
+        expected_version: u64,
+    ) -> Result<SbtMetadata, Error> {
+        caller.require_auth();
+        bump_instance(&env);
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        let is_auth = env
+            .storage()
+            .instance()
+            .get(&DataKey::AuthorizedContracts(caller.clone()))
+            .unwrap_or(false);
+
+        if caller != admin && !is_auth {
+            return Err(Error::Unauthorized);
+        }
+
+        metadata::update_metadata(&env, &user, new_uri, expected_version)
+    }
+
+    pub fn set_metadata_state(
+        env: Env,
+        admin: Address,
+        user: Address,
+        new_state: SbtMetadataState,
+    ) -> Result<SbtMetadata, Error> {
+        admin.require_auth();
+        bump_instance(&env);
+
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        if admin != current_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        metadata::set_metadata_state(&env, &user, new_state)
+    }
+
+    pub fn get_metadata(env: Env, user: Address) -> Result<SbtMetadata, Error> {
+        metadata::get_metadata(&env, &user)
+    }
+
+    pub fn token_uri(env: Env, user: Address) -> Result<String, Error> {
+        metadata::get_token_uri(&env, &user)
     }
 }
 

@@ -1,9 +1,10 @@
 #![no_std]
 
+pub mod batch;
 pub mod events;
 pub mod types;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 use types::*;
 
 // ── Treasury client stub ──────────────────────────────────────────────────────
@@ -334,6 +335,31 @@ impl VeloxousEscrow {
         events::emit_funds_released(&env, transaction_id, record.seller, seller_amount, fee, now);
 
         Ok(())
+    }
+
+    // ── Phase 4.5 — Batch Release ─────────────────────────────────────────────
+
+    /// Execute batch release for a vector of String transaction IDs.
+    ///
+    /// Callable by Admin multisig.
+    /// Validates that each escrow exists and is in Delivered state before release.
+    /// If an escrow is invalid/disputed, it is skipped and an error event is emitted (batch does not revert).
+    /// Token transfers are aggregated to minimize instruction counts and ledger entries.
+    pub fn batch_release(
+        env: Env,
+        admin: Address,
+        transaction_ids: Vec<String>,
+    ) -> Result<(u32, u32), Error> {
+        batch::batch_release(&env, &admin, transaction_ids)
+    }
+
+    /// Execute batch release for a vector of u64 transaction IDs.
+    pub fn batch_release_u64(
+        env: Env,
+        admin: Address,
+        transaction_ids: Vec<u64>,
+    ) -> Result<(u32, u32), Error> {
+        batch::batch_release_u64(&env, &admin, transaction_ids)
     }
 
     // ── Timeouts ──────────────────────────────────────────────────────────────

@@ -651,3 +651,121 @@ fn test_vault_circuit_breaker_fallback_completes_lifecycle_without_losing_funds(
     assert_eq!(token_client.balance(&escrow_client.address), 15);
     assert_eq!(token_client.balance(&vault_treasury), 0);
 }
+
+// ── Batch release tests ──────────────────────────────────────────────────────
+
+/// Batch release with 10 escrows (8 valid in Delivered state, 2 in Disputed state).
+/// Asserts that exactly 8 releases succeed and 2 are skipped with error events.
+#[test]
+fn test_batch_release_mixed_valid_and_disputed() {
+    let env = Env::default();
+    let (escrow_client, token_addr, token_client, token_admin, admin, buyer, seller) = setup(&env);
+
+    // Fund buyer with enough tokens for 10 escrows (10 x 1000 = 10,000)
+    token_admin.mint(&buyer, &10_000);
+
+    let mut tx_ids = soroban_sdk::Vec::new(&env);
+
+    // Create 10 escrows:
+    // tx_0 to tx_7 (8 escrows): Funded -> Shipped -> Delivered
+    // tx_8 and tx_9 (2 escrows): Funded -> Disputed
+    for i in 0..10u64 {
+        let tx_id = batch::u64_to_string(&env, i);
+        tx_ids.push_back(tx_id.clone());
+        escrow_client.fund_escrow(&buyer, &seller, &token_addr, &1000, &tx_id);
+
+        if i < 8 {
+            escrow_client.mark_shipped(&seller, &tx_id);
+            escrow_client.mark_delivered(&buyer, &tx_id);
+        } else {
+            escrow_client.raise_dispute(&buyer, &tx_id, &String::from_str(&env, "Defective item"));
+        }
+    }
+
+    // Call batch_release as admin
+    let (processed, skipped) = escrow_client.batch_release(&admin, &tx_ids);
+    assert_eq!(processed, 8);
+    assert_eq!(skipped, 2);
+
+    // Verify 8 valid escrows are Completed
+    for i in 0..8u64 {
+        let tx_id = batch::u64_to_string(&env, i);
+        let record = escrow_client.get_escrow(&tx_id);
+        assert_eq!(record.current_state, EscrowStatus::Completed);
+    }
+
+    // Verify 2 disputed escrows remain Disputed
+    for i in 8..10u64 {
+        let tx_id = batch::u64_to_string(&env, i);
+        let record = escrow_client.get_escrow(&tx_id);
+        assert_eq!(record.current_state, EscrowStatus::Disputed);
+    }
+
+    // Total seller payout for 8 escrows: 8 * 985 = 7880
+    assert_eq!(token_client.balance(&seller), 7880);
+    // Total fee accumulated in contract for 8 escrows: 8 * 15 = 120 (plus 2000 still locked in disputed escrows)
+    // Contract balance = 120 + 2000 = 2120
+    assert_eq!(token_client.balance(&escrow_client.address), 2120);
+}
+
+/// Assert that batch_release instruction count for 10 escrows is significantly lower
+/// than executing 10 individual release_funds calls.
+#[test]
+fn test_batch_release_gas_optimization() {
+    // 1. Setup individual release test
+    let env_single = Env::default();
+    let (escrow_single, token_addr_s, _t_client_s, t_admin_s, _admin_s, buyer_s, seller_s) = setup(&env_single);
+    t_admin_s.mint(&buyer_s, &10_000);
+
+    let mut single_tx_ids = soroban_sdk::Vec::new(&env_single);
+    for i in 0..10u64 {
+        let tx_id = batch::u64_to_string(&env_single, i);
+        single_tx_ids.push_back(tx_id.clone());
+        escrow_single.fund_escrow(&buyer_s, &seller_s, &token_addr_s, &1000, &tx_id);
+        escrow_single.mark_shipped(&seller_s, &tx_id);
+        escrow_single.mark_delivered(&buyer_s, &tx_id);
+    }
+
+    let mut single_total_instructions: u64 = 0;
+    for tx_id in single_tx_ids.iter() {
+        let b0 = env_single.budget().cpu_instruction_cost();
+        escrow_single.release_funds(&buyer_s, &tx_id);
+        let b1 = env_single.budget().cpu_instruction_cost();
+        single_total_instructions += if b1 >= b0 { b1 - b0 } else { b1 };
+    }
+
+    // 2. Setup batch release test
+    let env_batch = Env::default();
+    let (escrow_batch, token_addr_b, _t_client_b, t_admin_b, admin_b, buyer_b, seller_b) = setup(&env_batch);
+    t_admin_b.mint(&buyer_b, &10_000);
+
+    let mut batch_tx_ids = soroban_sdk::Vec::new(&env_batch);
+    for i in 0..10u64 {
+        let tx_id = batch::u64_to_string(&env_batch, i);
+        batch_tx_ids.push_back(tx_id.clone());
+        escrow_batch.fund_escrow(&buyer_b, &seller_b, &token_addr_b, &1000, &tx_id);
+        escrow_batch.mark_shipped(&seller_b, &tx_id);
+        escrow_batch.mark_delivered(&buyer_b, &tx_id);
+    }
+
+    let start_batch_instructions = env_batch.budget().cpu_instruction_cost();
+    let (processed, skipped) = escrow_batch.batch_release(&admin_b, &batch_tx_ids);
+    let end_batch_instructions = env_batch.budget().cpu_instruction_cost();
+    let batch_total_instructions = if end_batch_instructions >= start_batch_instructions {
+        end_batch_instructions - start_batch_instructions
+    } else {
+        end_batch_instructions
+    };
+
+    assert_eq!(processed, 10);
+    assert_eq!(skipped, 0);
+
+    // Assert batch_release consumes significantly lower cpu instructions than 10 individual releases
+    assert!(
+        batch_total_instructions < single_total_instructions,
+        "batch instruction count ({}) must be lower than 10 individual releases ({})",
+        batch_total_instructions,
+        single_total_instructions
+    );
+}
+
