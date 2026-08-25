@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "contracts/admin",
+    "contracts/arbitration",
     "contracts/marketplace_escrow",
     "contracts/nft",
     "contracts/treasury",
