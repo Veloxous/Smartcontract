@@ -3702,7 +3702,7 @@
                       "key": {
                         "vec": [
                           {
-                            "symbol": "AuthorizedContracts"
+                            "symbol": "AuthorizedContract"
                           },
                           {
                             "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"

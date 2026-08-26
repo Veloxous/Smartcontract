@@ -2,9 +2,11 @@
 
 use shared::auth;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, String
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
+    String, Vec,
 };
 
+pub mod merkle;
 pub mod metadata;
 use metadata::{SbtMetadata, SbtMetadataState};
 
@@ -18,6 +20,8 @@ pub enum Error {
     VersionMismatch = 7,
     MetadataAlreadyInitialized = 8,
     MetadataNotFound = 9,
+    Unauthorized = 10,
+    InvalidProof = 11,
 }
 
 #[contracttype]
@@ -44,6 +48,8 @@ pub enum DataKey {
     Score(Address),
     Balance(Address),
     Metadata(Address),
+    VerifiedBadge(Address),
+    MerkleRoot,
 }
 
 // 30 days assuming ~5s per ledger
@@ -101,6 +107,10 @@ impl ReputationContract {
             panic_with_error!(&env, auth::AuthError::Unauthorized);
         }
 
+        Self::mint_badge(&env, &user);
+    }
+
+    fn mint_badge(env: &Env, user: &Address) {
         // Only mint if not already minted
         if !env.storage().persistent().has(&DataKey::Balance(user.clone())) {
             env.storage().persistent().set(&DataKey::Balance(user.clone()), &1_i128);
@@ -112,13 +122,56 @@ impl ReputationContract {
                 score: 0,
                 score_tier: Tier::Unverified,
             });
-            bump_score(&env, &user);
-            
+            bump_score(env, user);
+
             // Auto-initialize default metadata if not initialized
             if !env.storage().persistent().has(&DataKey::Metadata(user.clone())) {
-                let _ = metadata::init_metadata(&env, &user, String::from_str(&env, "ipfs://default_sbt_metadata"));
+                let _ = metadata::init_metadata(env, user, String::from_str(env, "ipfs://default_sbt_metadata"));
             }
         }
+    }
+
+    // --- Merkle Allowlist: Verified Technician Badge ---
+
+    /// Admin-only: set the Merkle root of the verified technician allowlist.
+    pub fn set_merkle_root(env: Env, admin: Address, root: BytesN<32>) {
+        auth::require_admin(&env, &admin);
+        bump_instance(&env);
+        env.storage().instance().set(&DataKey::MerkleRoot, &root);
+    }
+
+    /// Returns the currently configured allowlist Merkle root, if any.
+    pub fn get_merkle_root(env: Env) -> Option<BytesN<32>> {
+        env.storage().instance().get(&DataKey::MerkleRoot)
+    }
+
+    /// Mints the "Verified Professional" Soulbound Badge to `address` if
+    /// `proof` is a valid Merkle proof of `address`'s membership in the
+    /// allowlist committed to by `merkle_root`.
+    pub fn mint_verified_badge(env: Env, address: Address, proof: Vec<BytesN<32>>) {
+        address.require_auth();
+        bump_instance(&env);
+
+        let root: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::MerkleRoot)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidProof));
+
+        if !merkle::verify_proof(&env, &proof, &root, &address) {
+            panic_with_error!(&env, Error::InvalidProof);
+        }
+
+        Self::mint_badge(&env, &address);
+
+        let key = DataKey::VerifiedBadge(address.clone());
+        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().extend_ttl(&key, BUMP_THRESHOLD, BUMP_LEDGERS);
+    }
+
+    /// Returns whether `address` holds the "Verified Professional" badge.
+    pub fn is_verified_professional(env: Env, address: Address) -> bool {
+        env.storage().persistent().get(&DataKey::VerifiedBadge(address)).unwrap_or(false)
     }
 
     // --- Dynamic Trust Scoring ---
@@ -260,17 +313,8 @@ impl ReputationContract {
         caller.require_auth();
         bump_instance(&env);
 
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-
-        let is_auth = env
-            .storage()
-            .instance()
-            .get(&DataKey::AuthorizedContracts(caller.clone()))
-            .unwrap_or(false);
+        let admin = auth::get_admin(&env);
+        let is_auth = auth::is_authorized_contract(&env, &caller);
 
         if caller != admin && !is_auth {
             return Err(Error::Unauthorized);
@@ -289,17 +333,8 @@ impl ReputationContract {
         caller.require_auth();
         bump_instance(&env);
 
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
-
-        let is_auth = env
-            .storage()
-            .instance()
-            .get(&DataKey::AuthorizedContracts(caller.clone()))
-            .unwrap_or(false);
+        let admin = auth::get_admin(&env);
+        let is_auth = auth::is_authorized_contract(&env, &caller);
 
         if caller != admin && !is_auth {
             return Err(Error::Unauthorized);
@@ -317,11 +352,7 @@ impl ReputationContract {
         admin.require_auth();
         bump_instance(&env);
 
-        let current_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)?;
+        let current_admin = auth::get_admin(&env);
 
         if admin != current_admin {
             return Err(Error::Unauthorized);
