@@ -1,0 +1,35 @@
+Fixes #7
+
+## Description
+
+This PR implements the core logic for trustless device exchanges as specified in [SWAP-01].
+
+### Key Features Implemented:
+1. **Dual-Deposit State Machine**:
+   - Implemented `SwapRecord` struct to track `swap_id`, `party_a`, `party_b`, and their collateral amounts.
+   - Designed states: `Proposed`, `AFunded`, `BFunded`, `FullyFunded`, `AConfirmed`, `BConfirmed`, `Completed`, `Disputed`.
+   - Contract securely transitions to `FullyFunded` only after both parties have deposited the exact required collateral amounts.
+   - Configured a 48-hour timeout logic. If one party fails to deposit, the funds can be unlocked securely by the depositor.
+
+2. **Oracle Price Integration**:
+   - Exposed `OracleTrait` and mocked integration.
+   - Ensures `collateral_a_amount` aligns with the oracle-fetched USD value of `Device B` with an enforced 5% slippage/variance tolerance.
+
+3. **Mutual Release and Confirmation**:
+   - `confirm_receipt` allows both parties to independently confirm the swap.
+   - Automatically returns the respective collateral upon dual confirmation.
+
+4. **Dispute and Slashing Mechanism**:
+   - Integrated `raise_dispute` to halt withdrawals in fraudulent scenarios.
+   - Admins can invoke `resolve_swap_dispute` to slash fraudulent collateral and award it to the victim.
+
+5. **Security**:
+   - Implemented `party.require_auth()` for all actions.
+   - Adhered to Check-Effects-Interactions patterns.
+   - Hardcoded accepted USDC address validation to prevent malicious tokens.
+
+6. **Testing**:
+   - Unit tested happy path, timeouts, and slashing mechanics successfully (`cargo test -p swap_engine`).
+   - Scaffolded fuzzing targets with `cargo-fuzz` to bombard deposit functions and assert state robustness.
+
+@Rampop01 Please review the implementation. 
