@@ -1,0 +1,11 @@
+[package]
+name = "swap_engine"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+interfaces = { path = "../interfaces" }
+
+[dev_dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

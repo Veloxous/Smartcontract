@@ -10,6 +10,8 @@ members = [
     "contracts/reputation",
     "contracts/shared",
     "contracts/vault",
+    "contracts/interfaces",
+    "contracts/swap_engine",
 ]
 
 [workspace.dependencies]

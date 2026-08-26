@@ -1,0 +1,20 @@
+[package]
+name = "swap_engine-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+soroban-sdk = { workspace = true, features = ["testutils"] }
+interfaces = { path = "../../interfaces" }
+swap_engine = { path = ".." }
+
+[[bin]]
+name = "swap_fuzzer"
+path = "fuzz_targets/swap_fuzzer.rs"
+test = false
+doc = false
