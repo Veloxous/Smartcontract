@@ -40,7 +40,7 @@ fn setup() -> (Env, SwapEngineClient<'static>, Address, TokenClient<'static>, Ad
     let contract_id = env.register_contract(None, SwapEngine);
     let client = SwapEngineClient::new(&env, &contract_id);
     
-    client.initialize(&admin, &usdc.address, &oracle_id);
+    client.initialize(&admin, &admin, &usdc.address, &oracle_id);
 
     (env, client, admin, usdc, party_a, party_b, device_a, device_b, oracle_id, usdc_admin)
 }

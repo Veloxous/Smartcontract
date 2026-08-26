@@ -23,7 +23,8 @@ pub struct SwapEngine;
 
 #[contractimpl]
 impl SwapEngine {
-    pub fn initialize(env: Env, admin: Address, usdc: Address, oracle: Address) {
+    pub fn initialize(env: Env, deployer: Address, admin: Address, usdc: Address, oracle: Address) {
+        deployer.require_auth();
         assert!(!env.storage().instance().has(&DataKey::Admin), "Already initialized");
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::USDC, &usdc);
@@ -45,6 +46,8 @@ impl SwapEngine {
 
         let price_a = oracle.get_price(&device_a);
         let price_b = oracle.get_price(&device_b);
+        assert!(price_a > 0, "Price A must be positive");
+        assert!(price_b > 0, "Price B must be positive");
 
         let swap_id: u64 = env.storage().instance().get(&DataKey::SwapCounter).unwrap();
         env.storage().instance().set(&DataKey::SwapCounter, &(swap_id + 1));

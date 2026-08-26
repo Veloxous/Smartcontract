@@ -12,6 +12,7 @@ members = [
     "contracts/vault",
     "contracts/interfaces",
     "contracts/swap_engine",
+    "contracts/swap_engine/fuzz",
 ]
 
 [workspace.dependencies]
