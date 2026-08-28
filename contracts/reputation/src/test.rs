@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use crate::{ReputationContract, ReputationContractClient, Tier};
-use soroban_sdk::{testutils::Address as _, Address, Env, String};
+use crate::{Error, ReputationContract, ReputationContractClient, Tier};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec};
 
 fn setup_test() -> (Env, ReputationContractClient<'static>, Address, Address) {
     let env = Env::default();
@@ -234,10 +234,111 @@ fn test_revoked_metadata_blocks_access() {
 fn test_unauthorized_metadata_update() {
     let (env, client, admin, user) = setup_test();
     client.mint(&admin, &user);
-    
+
     let unauthorized = Address::generate(&env);
     let new_uri = String::from_str(&env, "ipfs://unauthorized_update");
     let res = client.try_update_metadata(&unauthorized, &user, &new_uri, &1);
     assert_eq!(res, Err(Ok(Error::Unauthorized)));
+}
+
+// ── Merkle Allowlist: Verified Technician Badge ──────────────────────────────
+
+/// Builds a Merkle tree (using the same sorted-pair sha256 scheme the
+/// contract verifies against) over `leaves`, returning its root and the
+/// proof path for the leaf at `index`.
+fn build_merkle_tree(env: &Env, leaves: Vec<BytesN<32>>, index: u32) -> (BytesN<32>, Vec<BytesN<32>>) {
+    let mut layer = leaves;
+    let mut idx = index;
+    let mut proof: Vec<BytesN<32>> = Vec::new(env);
+
+    while layer.len() > 1 {
+        let mut next_layer: Vec<BytesN<32>> = Vec::new(env);
+        let mut i = 0u32;
+        while i < layer.len() {
+            if i + 1 < layer.len() {
+                let a = layer.get(i).unwrap();
+                let b = layer.get(i + 1).unwrap();
+                let parent = crate::merkle::hash_pair(env, &a, &b);
+                if i == idx {
+                    proof.push_back(b);
+                    idx = next_layer.len();
+                } else if i + 1 == idx {
+                    proof.push_back(a);
+                    idx = next_layer.len();
+                }
+                next_layer.push_back(parent);
+            } else {
+                let a = layer.get(i).unwrap();
+                if i == idx {
+                    idx = next_layer.len();
+                }
+                next_layer.push_back(a);
+            }
+            i += 2;
+        }
+        layer = next_layer;
+    }
+
+    (layer.get(0).unwrap(), proof)
+}
+
+fn generate_allowlist(env: &Env, count: u32) -> (Vec<Address>, Vec<BytesN<32>>) {
+    let mut addresses: Vec<Address> = Vec::new(env);
+    let mut leaves: Vec<BytesN<32>> = Vec::new(env);
+    for _ in 0..count {
+        let addr = Address::generate(env);
+        leaves.push_back(crate::merkle::leaf_hash(env, &addr));
+        addresses.push_back(addr);
+    }
+    (addresses, leaves)
+}
+
+#[test]
+fn test_mint_verified_badge_with_valid_proof() {
+    let (env, client, admin, _user) = setup_test();
+
+    let (addresses, leaves) = generate_allowlist(&env, 100);
+    let target_index = 47u32;
+    let (root, proof) = build_merkle_tree(&env, leaves, target_index);
+
+    client.set_merkle_root(&admin, &root);
+    assert_eq!(client.get_merkle_root(), Some(root));
+
+    let technician = addresses.get(target_index).unwrap();
+    assert!(!client.is_verified_professional(&technician));
+
+    client.mint_verified_badge(&technician, &proof);
+
+    assert!(client.is_verified_professional(&technician));
+    assert_eq!(client.balance(&technician), 1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_mint_verified_badge_with_tampered_proof_panics() {
+    let (env, client, admin, _user) = setup_test();
+
+    let (addresses, leaves) = generate_allowlist(&env, 100);
+    let target_index = 47u32;
+    let (root, mut proof) = build_merkle_tree(&env, leaves, target_index);
+
+    client.set_merkle_root(&admin, &root);
+
+    // Tamper with one node of an otherwise valid proof.
+    let bogus_sibling = crate::merkle::leaf_hash(&env, &Address::generate(&env));
+    proof.set(0, bogus_sibling);
+
+    let technician = addresses.get(target_index).unwrap();
+    client.mint_verified_badge(&technician, &proof);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+fn test_set_merkle_root_requires_admin() {
+    let (env, client, _admin, _user) = setup_test();
+
+    let not_admin = Address::generate(&env);
+    let root = BytesN::from_array(&env, &[0u8; 32]);
+    client.set_merkle_root(&not_admin, &root);
 }
 
