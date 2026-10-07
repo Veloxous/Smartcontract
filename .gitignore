@@ -7,3 +7,5 @@ pr.md
 
 # Local WASM build hash artifacts
 **/test_snapshots/wasm_hash.txt
+config.bat
+node_modules
